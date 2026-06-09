@@ -1,7 +1,7 @@
----
+﻿---
 name: project-task-runner
 description: 固定任务执行器。不负责产品规划，不负责状态推进。执行前读取任务上下文，只修改允许的文件，完成后生成任务报告。v5.0.0：支持 TDD 模式，自动协调 Test Writer → Test Reviewer → Implementer 三个角色。
-version: 5.4.0
+version: 5.5.0
 ---
 
 # Skill: project-task-runner
@@ -210,16 +210,16 @@ Test Writer 产出：
 
   <如果 risk_level 为 medium 或 high，追加：>
   CRITICAL: This is a medium/high-risk task. After the standard review, you MUST
-  perform the "Mutation Injection" step described in your SKILL.md — generate at
-  least 3 error implementations, inject them, and verify tests catch them.
+  perform the "Cheating Implementation Probe" step described in your SKILL.md — design at
+  least 3 cheating implementations, inject them, and verify tests catch them.
   ```
 
 Test Reviewer 产出：
 - `.project_ai/tdd/reviews/<task_id>.test-review.md`
 - `.project_ai/tdd/approvals/<task_id>.approved.md`（如果测试通过审查）
-- （risk_level >= medium）`.project_ai/tdd/mutation-results/<task_id>.mutation-results.md`
+- （risk_level >= medium）`.project_ai/tdd/cheating-probe-results/<task_id>.cheating-probe.md`
 
-**子代理返回后验证**：检查 approval 文件是否已生成。如果没有 approval 文件，**向用户报告审查结果**（review 报告中的弱点），等待测试修复后重新进入 Phase A。如果 risk_level >= medium 且 mutation-results 文件缺失，提示 Test Reviewer 补做变异注入。
+**子代理返回后验证**：检查 approval 文件是否已生成。如果没有 approval 文件，**向用户报告审查结果**（review 报告中的弱点），等待测试修复后重新进入 Phase A。如果 risk_level >= medium 且 cheating-probe 文件缺失，提示 Test Reviewer 补做 Cheating Implementation Probe。
 
 ### Phase C：孵化 Implementer（实现功能）
 
@@ -390,7 +390,7 @@ Spec Compliance Reviewer 产出：
 
    Test Writer       → .project_ai/tdd/coverage/<task_id>.coverage.md
    Test Reviewer     → .project_ai/tdd/reviews/<task_id>.test-review.md
-   <如果 risk_level >= medium：> Mutation Inject  → .project_ai/tdd/mutation-results/<task_id>.mutation-results.md
+   <如果 risk_level >= medium：> Cheating Probe  → .project_ai/tdd/cheating-probe-results/<task_id>.cheating-probe.md
    Implementer       → .project_ai/tdd/implementation-reports/<task_id>.implementation.md
    Spec Compliance   → .project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md
    <如果 risk_level = high：> E2E Results      → .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
@@ -444,7 +444,7 @@ These thoughts mean you are rationalizing. Stop immediately.
 | **TDD: open-questions 文件存在** | 暂停并向用户报告 spec 矛盾 |
 | **TDD: boundary check 失败** | 报告用户，实现者违规修改了禁止文件 |
 | **TDD: 测试在实现前就通过（绿灯）** | 这是无效测试，不继续实现 |
-| **TDD: mutation 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |
+| **TDD: cheating probe 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |
 | **TDD: e2e 失败（risk=high）** | 报告用户失败场景，要求 Implementer 修复后重新进入 Phase C |
 | **调度器违规：自己写了测试/审查/实现代码** | 立即停止，删除自己写的代码，改为调用 Agent 工具孵化子代理 |
 | **Spec Compliance Review 未通过（❌）** | 将问题回传给 Implementer 子代理修复，修复后重新运行 Spec Compliance Review，循环直到 ✅ |
@@ -466,13 +466,14 @@ project-ai tdd check-boundary <task_id>
 # 任务报告路径
 .project_ai/task_reports/iteration_<N>/task_<task_id>_report.json
 
-# TDD 产出（v5.3.0 新增 mutation-results + e2e-results）
+# TDD 产出（v5.5.0）
 .project_ai/tdd/coverage/<task_id>.coverage.md
 .project_ai/tdd/reviews/<task_id>.test-review.md
 .project_ai/tdd/approvals/<task_id>.approved.md
-.project_ai/tdd/mutation-results/<task_id>.mutation-results.md  （risk_level >= medium）
-.project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md    （所有 TDD 任务）
-.project_ai/tdd/e2e-results/<task_id>.e2e-results.md            （risk_level = high）
+.project_ai/tdd/cheating-probe-results/<task_id>.cheating-probe.md  （risk_level >= medium · Phase B）
+.project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md        （所有 TDD 任务 · Phase C2）
+.project_ai/tdd/mutation-results/<task_id>.mutation-results.md      （risk_level = high · Phase C 后）
+.project_ai/tdd/e2e-results/<task_id>.e2e-results.md                （risk_level = high）
 
 # 用户验证命令（执行完提示用户运行）
 project-ai task complete <task_id> --json

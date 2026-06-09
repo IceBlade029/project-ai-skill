@@ -1,7 +1,7 @@
 ---
 name: bdd-spec-writer
 description: 根据功能描述和验收标准编写 BDD .feature 文件和规则表。不修改实现代码，不修改测试代码。
-version: 5.3.0
+version: 5.5.0
 disable-model-invocation: true
 ---
 

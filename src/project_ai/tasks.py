@@ -5,7 +5,7 @@ import re
 import json
 from project_ai.state import STATE_DIR, load_state, save_state
 from project_ai.utils import backup_file, now_iso
-from project_ai.cli_tdd import _is_forbidden
+from project_ai.cli_tdd import _is_forbidden, _run_test, check_file_boundary
 
 
 def sync_tasks(cwd):
@@ -315,10 +315,11 @@ def complete_task(cwd, task_id):
             "missing_files": missing_files,
         }
 
-    # 6. TDD 审批门禁
+    # 6. TDD 审批门禁（v5.5.0 重构：fresh test run + git boundary + allowed_files + cheating-probe）
     tdd_config = task.get("tdd", {})
     if isinstance(tdd_config, dict) and tdd_config.get("enabled", False):
         sanitized = task_id.replace("/", "_").replace("\\", "_")
+        risk_level = task.get("risk_level", "medium")
 
         # 6a. 审批文件
         approval_path = os.path.join(
@@ -334,17 +335,63 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 6b. 文件边界检查（使用 v5.4.0 扩展的禁止列表）
-        violations = _check_report_forbidden_files(cwd, n, task_id)
-        if violations:
+        # 6b. Fresh test run（v5.5.0 新增 — 最终裁判亲自跑测试）
+        test_result = _run_test(cwd, task_id)
+        if not test_result.get("ok", False):
+            return {
+                "ok": False,
+                "error_code": "TDD_FRESH_TEST_FAILED",
+                "message": (
+                    f"测试命令执行失败: {test_result.get('message', '未知错误')}。"
+                    "请检查测试配置和依赖是否正确安装。"
+                ),
+            }
+        if not test_result.get("passed", False):
+            return {
+                "ok": False,
+                "error_code": "TDD_TESTS_NOT_PASSING",
+                "message": (
+                    f"测试未全部通过（exit_code={test_result.get('exit_code', '?')}）。"
+                    f"\nstdout: {test_result.get('stdout', '')[:500]}"
+                    f"\nstderr: {test_result.get('stderr', '')[:500]}"
+                ),
+            }
+
+        # 6c. 文件边界检查（v5.5.0 升级 — git diff + allowed_files 双重门禁）
+        allowed_files = task.get("expected_files", [])
+        boundary_passed, forbidden_violations, extra_files, boundary_method = \
+            check_file_boundary(cwd, allowed_files, task_id=task_id)
+
+        if forbidden_violations:
             return {
                 "ok": False,
                 "error_code": "TDD_FORBIDDEN_FILES_MODIFIED",
-                "message": f"实现者修改了以下禁止修改的文件: {violations}",
-                "violations": violations,
+                "message": f"实现者修改了以下禁止修改的文件（检测方式: {boundary_method}）: {forbidden_violations}",
+                "violations": forbidden_violations,
+                "detection_method": boundary_method,
             }
 
-        # 6c. Spec Compliance Review 门禁（v5.4.0）
+        if extra_files:
+            return {
+                "ok": False,
+                "error_code": "TDD_FILES_OUTSIDE_ALLOWED",
+                "message": (
+                    f"实现者修改了以下不在 allowed_files 中的生产文件: {extra_files}。"
+                    "这些文件未在任务计划中列出，属于越界修改。请检查是否遗漏了 allowed_files 声明，"
+                    "或回退这些越界变更。"
+                ),
+                "extra_files": extra_files,
+                "allowed_files": allowed_files,
+            }
+
+        if not boundary_passed:
+            return {
+                "ok": False,
+                "error_code": "TDD_BOUNDARY_CHECK_FAILED",
+                "message": f"文件边界检查未通过（检测方式: {boundary_method}）。",
+            }
+
+        # 6d. Spec Compliance Review 门禁（v5.4.0）
         sc_path = os.path.join(
             cwd, STATE_DIR, "tdd", "spec-compliance", f"{sanitized}.spec-compliance.md"
         )
@@ -369,35 +416,62 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 6d. 风险等级门禁
-        risk_level = task.get("risk_level", "medium")
-
-        # medium+: mutation results
+        # 6e. Cheating Implementation Probe（v5.5.0 — 独立路径，Phase B 产出）
         if risk_level in ("medium", "high"):
-            mr_path = os.path.join(
+            cp_path = os.path.join(
+                cwd, STATE_DIR, "tdd", "cheating-probe-results", f"{sanitized}.cheating-probe.md"
+            )
+            if not os.path.isfile(cp_path):
+                return {
+                    "ok": False,
+                    "error_code": "CHEATING_PROBE_MISSING",
+                    "message": (
+                        f"Cheating Implementation Probe 结果文件不存在（risk_level={risk_level}，必须提供）: "
+                        f".project_ai/tdd/cheating-probe-results/{sanitized}.cheating-probe.md。"
+                        "请先完成 Test Reviewer 的 Cheating Implementation Probe 步骤。"
+                    ),
+                }
+            killed, total = _parse_cheating_probe_results(cp_path)
+            # 强制最低数量：medium/high 至少 3 个 cheating probe
+            MIN_PROBES = 3
+            if total < MIN_PROBES:
+                return {
+                    "ok": False,
+                    "error_code": "CHEATING_PROBE_INSUFFICIENT",
+                    "message": (
+                        f"Cheating Implementation Probe 数量不足: {total} 个（要求至少 {MIN_PROBES} 个）。"
+                        "risk_level >= medium 必须执行至少 3 个作弊实现探测。"
+                    ),
+                }
+            if killed < total:
+                return {
+                    "ok": False,
+                    "error_code": "CHEATING_PROBE_SURVIVORS",
+                    "message": (
+                        f"Cheating Implementation Probe 未全部杀死: {killed}/{total} KILLED。"
+                        "存在 SURVIVED 作弊实现说明测试有盲区，请补充测试后重新运行 Cheating Probe。"
+                    ),
+                }
+
+        # 6f. Post-Green Mutation Testing（v5.5.0 新增 — Phase C 后，仅 high）
+        if risk_level == "high":
+            pgm_path = os.path.join(
                 cwd, STATE_DIR, "tdd", "mutation-results", f"{sanitized}.mutation-results.md"
             )
-            if not os.path.isfile(mr_path):
-                return {
-                    "ok": False,
-                    "error_code": "MUTATION_RESULTS_MISSING",
-                    "message": (
-                        f"变异注入结果文件不存在（risk_level={risk_level}，必须提供）: "
-                        f".project_ai/tdd/mutation-results/{sanitized}.mutation-results.md"
-                    ),
-                }
-            killed, total = _parse_mutation_results(mr_path)
-            if total > 0 and killed < total:
-                return {
-                    "ok": False,
-                    "error_code": "MUTATION_SURVIVORS",
-                    "message": (
-                        f"变异注入未全部杀死: {killed}/{total} KILLED。"
-                        "存在 SURVIVED 变异说明测试有盲区，请补充测试后重新运行变异注入。"
-                    ),
-                }
+            if os.path.isfile(pgm_path):
+                pgm_killed, pgm_total = _parse_mutation_results(pgm_path)
+                if pgm_total > 0 and pgm_killed < pgm_total:
+                    return {
+                        "ok": False,
+                        "error_code": "POST_GREEN_MUTATION_SURVIVORS",
+                        "message": (
+                            f"Post-Green Mutation Testing 未全部杀死: {pgm_killed}/{pgm_total} KILLED。"
+                            "正确实现被修改后测试未能发现回归，存在测试盲区。"
+                        ),
+                    }
+            # 注意：post-green mutation 文件不存在时仅警告，不阻塞（该功能尚未在所有流程中强制）
 
-        # high: E2E results
+        # 6g. E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
         e2e_scenarios = tdd_config.get("e2e_scenarios", [])
         if risk_level == "high" and e2e_scenarios:
             e2e_path = os.path.join(
@@ -436,26 +510,6 @@ def complete_task(cwd, task_id):
     }
 
 
-def _check_report_forbidden_files(cwd, iteration_n, task_id):
-    """检查任务报告中的 files_created/modified 是否包含禁止文件。"""
-    report_path = os.path.join(
-        cwd, STATE_DIR, "task_reports", f"iteration_{iteration_n}",
-        f"task_{task_id}_report.json"
-    )
-
-    if not os.path.isfile(report_path):
-        return []
-
-    try:
-        with open(report_path, "r", encoding="utf-8") as f:
-            report = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-    all_files = report.get("files_created", []) + report.get("files_modified", [])
-    return [f for f in all_files if _is_forbidden(f)]
-
-
 def _parse_spec_compliance_verdict(file_path):
     """从 spec-compliance 报告中解析 verdict。返回 'compliant' / 'issues_found' / 'unknown'。"""
     try:
@@ -483,13 +537,17 @@ def _parse_spec_compliance_verdict(file_path):
     return "unknown"
 
 
-def _parse_mutation_results(file_path):
-    """从 mutation-results 报告中解析 KILLED/SURVIVED。返回 (killed, total)。"""
+def _parse_cheating_probe_results(file_path):
+    """从 cheating-probe 报告中解析 KILLED/SURVIVED。返回 (killed, total)。
+
+    v5.5.0: 独立于 post-green mutation，专门解析 Phase B 的 cheating probe 结果。
+    如果 total 为 0 表示未执行任何 probe，视为未通过。
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
     except OSError:
-        return 0, 1
+        return 0, 0
 
     # 查找 "杀死: X/Y" 或 "Killed: X/Y"（大小写不敏感）
     m = re.search(r"(?i)(?:杀死|killed)\s*[:：]\s*(\d+)\s*/\s*(\d+)", content)
@@ -502,25 +560,60 @@ def _parse_mutation_results(file_path):
     if killed + survived > 0:
         return killed, killed + survived
 
-    return 0, 1
+    # 未找到任何结果 → 0 probe 执行
+    return 0, 0
+
+
+def _parse_mutation_results(file_path):
+    """从 post-green mutation-results 报告中解析 KILLED/SURVIVED。返回 (killed, total)。
+
+    v5.5.0: 专门用于 Phase C 后的传统 mutation testing（post-green）。
+    Phase B 的 cheating probe 使用 _parse_cheating_probe_results。
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return 0, 0
+
+    # 查找 "杀死: X/Y" 或 "Killed: X/Y"（大小写不敏感）
+    m = re.search(r"(?i)(?:杀死|killed)\s*[:：]\s*(\d+)\s*/\s*(\d+)", content)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    # Count KILLED and SURVIVED rows in table
+    killed = len(re.findall(r"\|\s*\d+\s*\|.*\|\s*✅.*\|\s*KILLED", content))
+    survived = len(re.findall(r"\|\s*\d+\s*\|.*\|\s*❌.*\|\s*SURVIVED", content))
+    if killed + survived > 0:
+        return killed, killed + survived
+
+    return 0, 0
 
 
 def _parse_e2e_results(file_path):
-    """从 e2e-results 报告中解析是否全部 pass。返回 (passed: bool, message: str)。"""
+    """从 e2e-results 报告中解析是否全部 pass。返回 (passed: bool, message: str)。
+
+    v5.5.0: fail-closed — 只有找到显式 PASS 标记才返回 True。
+    空报告、格式错误、无显式标记 → 一律判失败。
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
     except OSError:
         return False, "无法读取 E2E 结果文件"
 
-    # 查找失败标记
+    # 先查找显式失败标记
     failures = re.findall(r"(?i)(?:FAIL|❌)\s*[:：]?\s*(.+)", content)
     if failures:
         return False, "; ".join(failures[:5])
 
-    # 查找 pass 标记
-    if re.search(r"(?i)(?:all\s*(?:tests?\s*)?pass|✅.*pass|verdict\s*:\s*pass)", content):
+    # 必须找到显式 PASS 标记才判通过
+    explicit_pass = re.search(
+        r"(?i)(?:all\s*(?:tests?\s*)?pass|✅.*pass|verdict\s*:\s*pass|passed\s*:\s*true)",
+        content
+    )
+    if explicit_pass:
         return True, "全部 E2E 通过"
 
-    # 如果没有任何失败的明显标记，保守处理
-    return True, "E2E 结果已存在（无显式失败标记）"
+    # 无显式 PASS 标记 → fail-closed
+    return False, "E2E 结果文件中未找到显式 PASS 标记（verdict: pass / ✅ pass / all tests pass）"

@@ -1,7 +1,7 @@
 ---
 name: tdd-review-tests
 description: 审查并攻击测试质量，生成审查报告和审批文件。不修改实现代码。
-version: 5.4.0
+version: 5.5.0
 disable-model-invocation: true
 ---
 
@@ -137,7 +137,7 @@ If tests are NOT strong enough, do NOT create the approval file.
 
 Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-review.md` and report what needs to be fixed.
 
-# Cheating Implementation Probe（v5.3.0 新增 · v5.4.0 澄清 — risk_level >= medium 时强制）
+# Cheating Implementation Probe（v5.3.0 新增 · v5.5.0 独立路径 — risk_level >= medium 时强制）
 
 **触发条件**：如果调度器传入了 `risk_level: medium` 或 `risk_level: high`，你必须执行此步骤。如果 `risk_level: low`，此步骤可选。
 
@@ -145,7 +145,7 @@ Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-revie
 
 **为什么在 Phase B 做**：此时功能尚未实现（测试处于预期的 RED 状态）。你要做的是**故意写一个只求过测、不管真实需求的假实现**，然后看测试是否被它骗过。如果假实现能骗绿，说明测试不够强。这是在测试"测试的可信度"。
 
-（注意：这和实现完成后的传统 mutation testing 不同。传统 mutation testing 修改正确实现看测试是否变红，发生在 Phase C 之后。本步骤是 Phase B 的 cheating probe，用于决定是否批准测试。）
+（注意：这和实现完成后的传统 mutation testing 不同。传统 mutation testing 修改正确实现看测试是否变红，发生在 Phase C 之后，产出到 `mutation-results/`。本步骤是 Phase B 的 cheating probe，产出到 `cheating-probe-results/`，用于决定是否批准测试。）
 
 **执行步骤**：
 
@@ -162,7 +162,7 @@ Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-revie
    - 记录：测试是否变红？（**应该红** = 识破了作弊实现；**如果绿了** = 测试被作弊实现骗过，说明测试太弱）
    - **立即撤销**所有临时修改，恢复目录原状
 
-3. 将结果写入 `.project_ai/tdd/mutation-results/<task_id>.mutation-results.md`：
+3. 将结果写入 `.project_ai/tdd/cheating-probe-results/<task_id>.cheating-probe.md`：
 
    ```markdown
    # Cheating Implementation Probe — <task_id>
@@ -183,10 +183,11 @@ Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-revie
 4. **判定**：
    - 全部杀死（KILLED = 100%）→ 测试能区分真假实现，可以生成 approval
    - 有存活（SURVIVED > 0）→ 测试存在盲区，**不得生成 approval 文件**，必须在 review 报告中列出缺失的测试类型
+   - 数量不足（total < 3）→ 不满足最低要求，必须补充更多 cheating probe
 
 **重要**：作弊注入操作后必须恢复所有临时修改/新建。不得遗留任何注入代码在 src/ 中。
 
-**与后期 Mutation Testing 的区别**：本步骤是"测试审查"的一部分（能不能识破假实现），发生在实现之前。实现完成后的 mutation testing（修改正确代码看测试是否能发现回归）由 `project-ai task complete` CLI 强制复核。
+**与后期 Mutation Testing 的区别**：本步骤是"测试审查"的一部分（能不能识破假实现），发生在实现之前，产出到 `cheating-probe-results/`。实现完成后的 mutation testing（修改正确代码看测试是否能发现回归）产出到 `mutation-results/`，由 `project-ai task complete` CLI 强制复核。
 
 # Red Flags — STOP and Self-Correct
 
@@ -200,7 +201,7 @@ These thoughts mean you are rationalizing. Stop immediately.
 | "The implementer will probably handle this correctly" | Tests must ENFORCE correctness, not trust it. If a test can be passed by hardcoding, it's weak. |
 | "I've reviewed enough, the Test Writer did a good job" | You are the attacker. Assume the Test Writer missed something. Your job is to find it. |
 | "This mutation survived but it's an unlikely bug" | If a mutation survives, the tests have a blind spot. Likelihood is irrelevant — the gap is real. |
-| "I'll skip the full mutation injection, it takes too long" | For risk_level >= medium, mutation injection is MANDATORY. Skipping it = skipping the strongest verification. |
+| "I'll skip the full cheating probe, it takes too long" | For risk_level >= medium, cheating implementation probe is MANDATORY. Skipping it = skipping the strongest verification. |
 | "The coverage report looks complete, I trust it" | Coverage reports are Test Writer claims. You verify independently. Trust nothing. |
 
 # Final response
@@ -211,4 +212,4 @@ Summarize:
 2. Main weaknesses found
 3. Required test changes (if not approved)
 4. Whether an implementer is allowed to start
-5. (if risk_level >= medium) Mutation injection results: KILLED/SURVIVED count
+5. (if risk_level >= medium) Cheating probe results: KILLED/SURVIVED count

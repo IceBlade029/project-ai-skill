@@ -7,7 +7,7 @@ import subprocess
 
 from project_ai.state import STATE_DIR, load_state
 
-# v5.4.0: 全面禁止修改的前缀和文件模式
+# v5.5.0: 全面禁止修改的前缀和文件模式
 FORBIDDEN_PREFIXES = [
     "tests/",
     "test/",
@@ -19,7 +19,9 @@ FORBIDDEN_PREFIXES = [
     ".project_ai/tdd/approvals/",
     ".project_ai/tdd/red-runs/",
     ".project_ai/tdd/spec-compliance/",
+    ".project_ai/tdd/cheating-probe-results/",
     ".project_ai/tdd/mutation-results/",
+    ".project_ai/tdd/post-green-mutation-results/",
     ".project_ai/tdd/e2e-results/",
     ".project_ai/tdd/open-questions/",
     ".project_ai/tdd/implementation-reports/",
@@ -27,6 +29,7 @@ FORBIDDEN_PREFIXES = [
 ]
 
 FORBIDDEN_FILE_PATTERNS = [
+    # 测试文件
     "*.test.ts",
     "*.test.tsx",
     "*.test.js",
@@ -35,10 +38,28 @@ FORBIDDEN_FILE_PATTERNS = [
     "*.spec.tsx",
     "*.spec.js",
     "*.spec.jsx",
+    # 测试配置
     "playwright.config.*",
     "vitest.config.*",
     "jest.config.*",
     "cypress.config.*",
+    # 构建配置
+    "vite.config.*",
+    "webpack.config.*",
+    "rollup.config.*",
+    "tsconfig*.json",
+    "eslint.config.*",
+    ".eslintrc*",
+    ".prettierrc*",
+    # 包管理
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lockb",
+    # 环境变量
+    ".env",
+    ".env.*",
 ]
 
 
@@ -205,25 +226,119 @@ def _check_boundary(cwd, task_id):
     }
 
 
+def _get_all_changed_files(cwd):
+    """收集所有文件变更（unstaged + staged + untracked + deleted）。
+    返回 list 表示成功，返回 None 表示 git 不可用。"""
+    all_files = set()
+
+    commands = [
+        ["git", "diff", "--name-only"],                          # unstaged modify/delete
+        ["git", "diff", "--cached", "--name-only"],              # staged changes
+        ["git", "ls-files", "--others", "--exclude-standard"],   # untracked
+        ["git", "diff", "--name-only", "--diff-filter=D"],       # deleted (unstaged)
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=D"],  # deleted (staged)
+    ]
+
+    any_success = False
+    for cmd in commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=cwd,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return None
+
+        if result.returncode != 0:
+            continue
+
+        any_success = True
+        for line in result.stdout.split("\n"):
+            stripped = line.strip()
+            if stripped:
+                all_files.add(stripped)
+
+    if not any_success:
+        return None
+
+    return sorted(all_files)
+
+
 def _git_diff_check(cwd):
-    """用 git diff 检查文件变更。返回 None 表示 git 不可用。"""
+    """用 git 检查文件变更中的 forbidden 文件。返回 list 或 None（git 不可用）。"""
+    all_files = _get_all_changed_files(cwd)
+    if all_files is None:
+        return None
+    return [f for f in all_files if _is_forbidden(f)]
+
+
+def check_file_boundary(cwd, allowed_files, task_id=None):
+    """综合性文件边界检查（v5.5.0）。
+
+    检查两个维度：
+    1. forbidden: 变更文件不能命中 FORBIDDEN_PREFIXES / FORBIDDEN_FILE_PATTERNS
+    2. allowed: 生产代码变更（非 .project_ai/ 目录）必须在 allowed_files 内
+
+    allowed_files: 任务允许修改的文件列表
+    task_id: 可选，用于 fallback 报告检查
+
+    Returns: (passed: bool, forbidden_violations: list, extra_files: list, method: str)
+    """
+    all_changed = _get_all_changed_files(cwd)
+
+    if all_changed is None:
+        # git 不可用，fallback 到报告检查
+        if task_id is not None:
+            return _check_boundary_from_report(cwd, task_id, allowed_files)
+        return True, [], [], "none"
+
+    # 1. forbidden 检查
+    forbidden_violations = [f for f in all_changed if _is_forbidden(f)]
+
+    # 2. allowed 检查：生产代码（非 .project_ai/ 目录）必须在 allowed_files 内
+    allowed_set = set(allowed_files)
+    # 以下是已知的流程文件前缀，不受 allowed_files 限制
+    PROCESS_PREFIXES = (
+        ".project_ai/",
+    )
+    prod_files = [f for f in all_changed if not f.startswith(PROCESS_PREFIXES)]
+    extra_files = [f for f in prod_files if f not in allowed_set]
+
+    passed = len(forbidden_violations) == 0 and len(extra_files) == 0
+    return passed, forbidden_violations, extra_files, "git_diff"
+
+
+def _check_boundary_from_report(cwd, task_id, allowed_files):
+    """从任务报告检查边界（git 不可用时的 fallback）。"""
+    state = load_state(cwd)
+    if state is None:
+        return True, [], [], "none"
+
+    n = state.get("current_iteration", 0)
+    report_path = os.path.join(
+        cwd, STATE_DIR, "task_reports", f"iteration_{n}", f"task_{task_id}_report.json"
+    )
+
+    if not os.path.isfile(report_path):
+        return True, [], [], "none"
+
     try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=MCA"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=cwd,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
+        with open(report_path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return True, [], [], "none"
 
-    if result.returncode != 0:
-        return None
+    all_files = report.get("files_created", []) + report.get("files_modified", [])
+    forbidden_violations = [f for f in all_files if _is_forbidden(f)]
 
-    files = [f.strip() for f in result.stdout.split("\n") if f.strip()]
-    violations = [f for f in files if _is_forbidden(f)]
-    return violations
+    allowed_set = set(allowed_files)
+    extra_files = [f for f in all_files if f not in allowed_set and not f.startswith(".project_ai/")]
+
+    passed = len(forbidden_violations) == 0 and len(extra_files) == 0
+    return passed, forbidden_violations, extra_files, "report_check"
 
 
 def _find_task(state, task_id):
