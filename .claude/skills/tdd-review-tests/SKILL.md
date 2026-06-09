@@ -187,7 +187,7 @@ Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-revie
 
 **重要**：作弊注入操作后必须恢复所有临时修改/新建。不得遗留任何注入代码在 src/ 中。
 
-**与后期 Mutation Testing 的区别**：本步骤是"测试审查"的一部分（能不能识破假实现），发生在实现之前，产出到 `cheating-probe-results/`。实现完成后的 mutation testing（修改正确代码看测试是否能发现回归）产出到 `mutation-results/`，由 `project-ai task complete` CLI 强制复核。
+**与后期 Mutation Testing 的区别**：本步骤是"测试审查"的一部分（能不能识破假实现），发生在实现之前，产出到 `cheating-probe-results/`。实现完成后的 mutation testing（修改正确代码看测试是否能发现回归）产出到 `mutation-results/`。如果 post-green mutation 结果文件存在，`project-ai task complete` CLI 会强制复核其内容；目前 high risk 任务建议执行 post-green mutation，但文件缺失暂不阻塞完成。
 
 # Red Flags — STOP and Self-Correct
 

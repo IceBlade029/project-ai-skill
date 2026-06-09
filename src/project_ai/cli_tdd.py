@@ -9,11 +9,14 @@ from project_ai.state import STATE_DIR, load_state
 
 # v5.5.0: 全面禁止修改的前缀和文件模式
 FORBIDDEN_PREFIXES = [
+    # 测试目录（永远禁止实现代理修改）
     "tests/",
     "test/",
     "e2e/",
     "__tests__/",
+    # Spec / BDD（永远禁止实现代理修改）
     ".project_ai/specs/",
+    # TDD 流程产物（各角色独立产出，实现代理禁止修改）
     ".project_ai/tdd/coverage/",
     ".project_ai/tdd/reviews/",
     ".project_ai/tdd/approvals/",
@@ -24,8 +27,15 @@ FORBIDDEN_PREFIXES = [
     ".project_ai/tdd/post-green-mutation-results/",
     ".project_ai/tdd/e2e-results/",
     ".project_ai/tdd/open-questions/",
+    # TDD 实现产物（仅实现代理可写）
     ".project_ai/tdd/implementation-reports/",
     ".project_ai/tdd/blockers/",
+    # 项目关键文件（仅 CLI / iteration-manager 可写，任何任务代理禁止修改）
+    ".project_ai/state.json",
+    ".project_ai/plans/",
+    ".project_ai/requirements/",
+    ".project_ai/iteration_reports/",
+    ".project_ai/confirmations/",
 ]
 
 FORBIDDEN_FILE_PATTERNS = [
@@ -275,14 +285,35 @@ def _git_diff_check(cwd):
     return [f for f in all_files if _is_forbidden(f)]
 
 
+def _is_path_allowed(path, allowed_patterns):
+    """检查 path 是否匹配 allowed_patterns 中的任一模式。
+
+    支持三种匹配方式（按优先级）：
+    1. 精确匹配：path == pattern
+    2. 目录前缀：pattern 以 / 结尾时，path 以 pattern 开头即匹配
+       （如 "src/features/inventory/" 匹配 "src/features/inventory/sort.ts"）
+    3. Glob 模式：fnmatch（支持 * 和 ? 通配符）
+       （如 "src/features/inventory/*.ts" 匹配 "src/features/inventory/sort.ts"）
+    """
+    for pattern in allowed_patterns:
+        if path == pattern:
+            return True
+        if pattern.endswith("/") and path.startswith(pattern):
+            return True
+        if fnmatch.fnmatch(path, pattern):
+            return True
+    return False
+
+
 def check_file_boundary(cwd, allowed_files, task_id=None):
     """综合性文件边界检查（v5.5.0）。
 
     检查两个维度：
     1. forbidden: 变更文件不能命中 FORBIDDEN_PREFIXES / FORBIDDEN_FILE_PATTERNS
-    2. allowed: 生产代码变更（非 .project_ai/ 目录）必须在 allowed_files 内
+    2. allowed: 生产代码变更（非 .project_ai/ 目录）必须匹配 allowed_files 中的模式
+       （支持精确匹配、目录前缀、glob 通配符）
 
-    allowed_files: 任务允许修改的文件列表
+    allowed_files: 任务允许修改的文件列表（支持 glob/目录前缀）
     task_id: 可选，用于 fallback 报告检查
 
     Returns: (passed: bool, forbidden_violations: list, extra_files: list, method: str)
@@ -299,13 +330,12 @@ def check_file_boundary(cwd, allowed_files, task_id=None):
     forbidden_violations = [f for f in all_changed if _is_forbidden(f)]
 
     # 2. allowed 检查：生产代码（非 .project_ai/ 目录）必须在 allowed_files 内
-    allowed_set = set(allowed_files)
     # 以下是已知的流程文件前缀，不受 allowed_files 限制
     PROCESS_PREFIXES = (
         ".project_ai/",
     )
     prod_files = [f for f in all_changed if not f.startswith(PROCESS_PREFIXES)]
-    extra_files = [f for f in prod_files if f not in allowed_set]
+    extra_files = [f for f in prod_files if not _is_path_allowed(f, allowed_files)]
 
     passed = len(forbidden_violations) == 0 and len(extra_files) == 0
     return passed, forbidden_violations, extra_files, "git_diff"
@@ -334,8 +364,9 @@ def _check_boundary_from_report(cwd, task_id, allowed_files):
     all_files = report.get("files_created", []) + report.get("files_modified", [])
     forbidden_violations = [f for f in all_files if _is_forbidden(f)]
 
-    allowed_set = set(allowed_files)
-    extra_files = [f for f in all_files if f not in allowed_set and not f.startswith(".project_ai/")]
+    extra_files = [f for f in all_files
+                   if not f.startswith(".project_ai/")
+                   and not _is_path_allowed(f, allowed_files)]
 
     passed = len(forbidden_violations) == 0 and len(extra_files) == 0
     return passed, forbidden_violations, extra_files, "report_check"
