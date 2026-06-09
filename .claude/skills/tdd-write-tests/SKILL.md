@@ -1,7 +1,7 @@
 ---
 name: tdd-write-tests
 description: 根据 BDD 场景和规则表编写 TDD 测试。不能修改实现代码。
-version: 5.1.0
+version: 5.4.0
 disable-model-invocation: true
 ---
 

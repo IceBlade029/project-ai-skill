@@ -1,7 +1,7 @@
 ---
 name: tdd-review-tests
 description: 审查并攻击测试质量，生成审查报告和审批文件。不修改实现代码。
-version: 5.3.0
+version: 5.4.0
 disable-model-invocation: true
 ---
 
@@ -137,48 +137,56 @@ If tests are NOT strong enough, do NOT create the approval file.
 
 Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-review.md` and report what needs to be fixed.
 
-# Mutation Injection（v5.3.0 新增 — risk_level >= medium 时强制）
+# Cheating Implementation Probe（v5.3.0 新增 · v5.4.0 澄清 — risk_level >= medium 时强制）
 
 **触发条件**：如果调度器传入了 `risk_level: medium` 或 `risk_level: high`，你必须执行此步骤。如果 `risk_level: low`，此步骤可选。
 
-**目标**：不仅用推理审查测试，还要用**实证**——真的注入错误实现，跑测试，看测试能不能抓住。
+**目标**：不仅用推理审查测试，还要用**实证**——构造"作弊实现"（cheating implementation），看测试能不能识破它。
+
+**为什么在 Phase B 做**：此时功能尚未实现（测试处于预期的 RED 状态）。你要做的是**故意写一个只求过测、不管真实需求的假实现**，然后看测试是否被它骗过。如果假实现能骗绿，说明测试不够强。这是在测试"测试的可信度"。
+
+（注意：这和实现完成后的传统 mutation testing 不同。传统 mutation testing 修改正确实现看测试是否变红，发生在 Phase C 之后。本步骤是 Phase B 的 cheating probe，用于决定是否批准测试。）
 
 **执行步骤**：
 
-1. 根据 spec 和当前测试覆盖，设计至少 3 个错误实现（mutant）：
-   - **数据错误**：如排序反转、值替换、条件取反
-   - **状态错误**：如不保存状态、跳过验证、忽略错误处理
-   - **边界错误**：如只处理第一条数据、固定返回值、空数据处理错误
+1. 根据 spec 和当前测试覆盖，设计至少 3 个"作弊实现"：
+   - **硬编码型**：只返回测试数据对应的值，不处理一般情况（如 `return ["item1"]` 而非从数据库读取）
+   - **状态跳过型**：跳过保存/持久化/验证步骤，但让返回值看起来正确
+   - **边界偷懒型**：只处理第一条/最后一个数据，忽略中间的情况
+   - **错误吞噬型**：捕获所有异常但不处理，静默返回默认值
+   - **条件反转型**：把 `>` 写成 `>=`，把 `allowed` 写成 `!forbidden`
 
-2. 对每个 mutant：
-   - 在 `src/` 中**临时修改**对应的实现代码，注入该错误
+2. 对每个作弊实现：
+   - 在 `src/` 中**临时创建**作弊实现代码（如果原始代码不存在，则新建临时文件；如果已有占位代码，则修改它）
    - 运行 `project-ai tdd run-test <task_id>`
-   - 记录：测试是否变红？（应该红 = 抓住了错误）
-   - **立即撤销**注入的修改，恢复原始代码
+   - 记录：测试是否变红？（**应该红** = 识破了作弊实现；**如果绿了** = 测试被作弊实现骗过，说明测试太弱）
+   - **立即撤销**所有临时修改，恢复目录原状
 
 3. 将结果写入 `.project_ai/tdd/mutation-results/<task_id>.mutation-results.md`：
 
    ```markdown
-   # Mutation Injection Results — <task_id>
+   # Cheating Implementation Probe — <task_id>
 
-   | # | Mutant | 注入方式 | 预期 | 实际 | 判定 |
-   |---|--------|---------|------|------|------|
-   | 1 | 排序反转 | 修改 compare 函数返回值 | 测试应变红 | ✅ 变红 | KILLED |
-   | 2 | 跳过保存 | 注释 save() 调用 | 测试应变红 | ❌ 仍然绿 | SURVIVED |
-   | 3 | 只处理首条 | for 循环改为只取 [0] | 测试应变红 | ✅ 变红 | KILLED |
+   | # | 作弊方式 | 注入方法 | 测试应红 | 实际结果 | 判定 |
+   |---|---------|---------|---------|---------|------|
+   | 1 | 硬编码返回值 | `return ["fixed"]` 替代数据库查询 | 应变红 | ✅ 变红 | KILLED |
+   | 2 | 跳过保存 | 注释 save() 调用 | 应变红 | ❌ 仍然绿 | SURVIVED |
+   | 3 | 只处理首条 | for 循环改为只取 [0] | 应变红 | ✅ 变红 | KILLED |
 
    ## 结论
 
-   - 杀死: 2/3
-   - 存活: 1/3（跳过保存 — 缺少持久化验证测试）
+   - 杀死（识破）: 2/3
+   - 存活（骗过）: 1/3（跳过保存 — 测试缺少持久化验证）
    - 判定: 测试质量不充分，需要补充持久化验证测试后才能批准
    ```
 
 4. **判定**：
-   - 全部杀死（KILLED = 100%）→ 测试质量合格，可以生成 approval
+   - 全部杀死（KILLED = 100%）→ 测试能区分真假实现，可以生成 approval
    - 有存活（SURVIVED > 0）→ 测试存在盲区，**不得生成 approval 文件**，必须在 review 报告中列出缺失的测试类型
 
-**重要**：变异注入操作后必须恢复所有临时修改。不得遗留任何注入代码在 src/ 中。
+**重要**：作弊注入操作后必须恢复所有临时修改/新建。不得遗留任何注入代码在 src/ 中。
+
+**与后期 Mutation Testing 的区别**：本步骤是"测试审查"的一部分（能不能识破假实现），发生在实现之前。实现完成后的 mutation testing（修改正确代码看测试是否能发现回归）由 `project-ai task complete` CLI 强制复核。
 
 # Red Flags — STOP and Self-Correct
 

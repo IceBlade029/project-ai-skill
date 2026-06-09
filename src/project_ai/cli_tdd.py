@@ -2,9 +2,61 @@
 
 import os
 import json
+import fnmatch
 import subprocess
 
 from project_ai.state import STATE_DIR, load_state
+
+# v5.4.0: 全面禁止修改的前缀和文件模式
+FORBIDDEN_PREFIXES = [
+    "tests/",
+    "test/",
+    "e2e/",
+    "__tests__/",
+    ".project_ai/specs/",
+    ".project_ai/tdd/coverage/",
+    ".project_ai/tdd/reviews/",
+    ".project_ai/tdd/approvals/",
+    ".project_ai/tdd/red-runs/",
+    ".project_ai/tdd/spec-compliance/",
+    ".project_ai/tdd/mutation-results/",
+    ".project_ai/tdd/e2e-results/",
+    ".project_ai/tdd/open-questions/",
+    ".project_ai/tdd/implementation-reports/",
+    ".project_ai/tdd/blockers/",
+]
+
+FORBIDDEN_FILE_PATTERNS = [
+    "*.test.ts",
+    "*.test.tsx",
+    "*.test.js",
+    "*.test.jsx",
+    "*.spec.ts",
+    "*.spec.tsx",
+    "*.spec.js",
+    "*.spec.jsx",
+    "playwright.config.*",
+    "vitest.config.*",
+    "jest.config.*",
+    "cypress.config.*",
+]
+
+
+def _is_forbidden(file_path):
+    """检查文件路径是否命中任何禁止规则。"""
+    for prefix in FORBIDDEN_PREFIXES:
+        if file_path.startswith(prefix):
+            return True
+    for pattern in FORBIDDEN_FILE_PATTERNS:
+        if fnmatch.fnmatch(file_path, pattern):
+            return True
+    # 也匹配路径中任意一层目录命中模式
+    parts = file_path.replace("\\", "/").split("/")
+    for part in parts:
+        for pattern in FORBIDDEN_FILE_PATTERNS:
+            if fnmatch.fnmatch(part, pattern):
+                return True
+    return False
 
 
 def run(cwd, args):
@@ -111,11 +163,10 @@ def _check_approval(cwd, task_id):
 
 
 def _check_boundary(cwd, task_id):
-    """检查实现者是否越界修改了 tests/ 或 docs/specs/ 等禁止文件。"""
-    forbidden_prefixes = ["tests/", "docs/specs/"]
+    """检查实现者是否越界修改了测试/spec/tdd/build 等禁止文件。"""
 
-    # 策略 1: git diff
-    violations = _git_diff_check(cwd, forbidden_prefixes)
+    # 策略 1: git diff（最可靠）
+    violations = _git_diff_check(cwd)
     if violations is not None:
         return {
             "ok": True,
@@ -124,7 +175,7 @@ def _check_boundary(cwd, task_id):
             "violations": violations,
         }
 
-    # 策略 2: 任务报告交叉检查
+    # 策略 2: 任务报告交叉检查（fallback）
     state = load_state(cwd)
     if state is None:
         return {"ok": True, "passed": True, "method": "none", "violations": []}
@@ -144,12 +195,7 @@ def _check_boundary(cwd, task_id):
         return {"ok": True, "passed": True, "method": "none", "violations": []}
 
     all_files = report.get("files_created", []) + report.get("files_modified", [])
-    violations = []
-    for f in all_files:
-        for prefix in forbidden_prefixes:
-            if f.startswith(prefix):
-                violations.append(f)
-                break
+    violations = [f for f in all_files if _is_forbidden(f)]
 
     return {
         "ok": True,
@@ -159,7 +205,7 @@ def _check_boundary(cwd, task_id):
     }
 
 
-def _git_diff_check(cwd, forbidden_prefixes):
+def _git_diff_check(cwd):
     """用 git diff 检查文件变更。返回 None 表示 git 不可用。"""
     try:
         result = subprocess.run(
@@ -176,13 +222,7 @@ def _git_diff_check(cwd, forbidden_prefixes):
         return None
 
     files = [f.strip() for f in result.stdout.split("\n") if f.strip()]
-    violations = []
-    for f in files:
-        for prefix in forbidden_prefixes:
-            if f.startswith(prefix):
-                violations.append(f)
-                break
-
+    violations = [f for f in files if _is_forbidden(f)]
     return violations
 
 

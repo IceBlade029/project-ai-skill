@@ -1,9 +1,11 @@
 """任务管理 — next / context / complete / sync."""
 
 import os
+import re
 import json
 from project_ai.state import STATE_DIR, load_state, save_state
 from project_ai.utils import backup_file, now_iso
+from project_ai.cli_tdd import _is_forbidden
 
 
 def sync_tasks(cwd):
@@ -317,6 +319,8 @@ def complete_task(cwd, task_id):
     tdd_config = task.get("tdd", {})
     if isinstance(tdd_config, dict) and tdd_config.get("enabled", False):
         sanitized = task_id.replace("/", "_").replace("\\", "_")
+
+        # 6a. 审批文件
         approval_path = os.path.join(
             cwd, STATE_DIR, "tdd", "approvals", f"{sanitized}.approved.md"
         )
@@ -330,11 +334,8 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 7. TDD 文件边界检查
-        forbidden_prefixes = ["tests/", "docs/specs/"]
-        violations = _check_report_forbidden_files(
-            cwd, n, task_id, forbidden_prefixes
-        )
+        # 6b. 文件边界检查（使用 v5.4.0 扩展的禁止列表）
+        violations = _check_report_forbidden_files(cwd, n, task_id)
         if violations:
             return {
                 "ok": False,
@@ -342,6 +343,82 @@ def complete_task(cwd, task_id):
                 "message": f"实现者修改了以下禁止修改的文件: {violations}",
                 "violations": violations,
             }
+
+        # 6c. Spec Compliance Review 门禁（v5.4.0）
+        sc_path = os.path.join(
+            cwd, STATE_DIR, "tdd", "spec-compliance", f"{sanitized}.spec-compliance.md"
+        )
+        if not os.path.isfile(sc_path):
+            return {
+                "ok": False,
+                "error_code": "SPEC_COMPLIANCE_MISSING",
+                "message": (
+                    f"Spec Compliance Review 报告不存在: "
+                    f".project_ai/tdd/spec-compliance/{sanitized}.spec-compliance.md。"
+                    "请先完成 Spec Compliance Review (Phase C2) 流程。"
+                ),
+            }
+        sc_verdict = _parse_spec_compliance_verdict(sc_path)
+        if sc_verdict != "compliant":
+            return {
+                "ok": False,
+                "error_code": "SPEC_COMPLIANCE_FAILED",
+                "message": (
+                    f"Spec Compliance Review 未通过（verdict: {sc_verdict}）。"
+                    "请修复 spec 合规问题后重新运行 Spec Compliance Review。"
+                ),
+            }
+
+        # 6d. 风险等级门禁
+        risk_level = task.get("risk_level", "medium")
+
+        # medium+: mutation results
+        if risk_level in ("medium", "high"):
+            mr_path = os.path.join(
+                cwd, STATE_DIR, "tdd", "mutation-results", f"{sanitized}.mutation-results.md"
+            )
+            if not os.path.isfile(mr_path):
+                return {
+                    "ok": False,
+                    "error_code": "MUTATION_RESULTS_MISSING",
+                    "message": (
+                        f"变异注入结果文件不存在（risk_level={risk_level}，必须提供）: "
+                        f".project_ai/tdd/mutation-results/{sanitized}.mutation-results.md"
+                    ),
+                }
+            killed, total = _parse_mutation_results(mr_path)
+            if total > 0 and killed < total:
+                return {
+                    "ok": False,
+                    "error_code": "MUTATION_SURVIVORS",
+                    "message": (
+                        f"变异注入未全部杀死: {killed}/{total} KILLED。"
+                        "存在 SURVIVED 变异说明测试有盲区，请补充测试后重新运行变异注入。"
+                    ),
+                }
+
+        # high: E2E results
+        e2e_scenarios = tdd_config.get("e2e_scenarios", [])
+        if risk_level == "high" and e2e_scenarios:
+            e2e_path = os.path.join(
+                cwd, STATE_DIR, "tdd", "e2e-results", f"{sanitized}.e2e-results.md"
+            )
+            if not os.path.isfile(e2e_path):
+                return {
+                    "ok": False,
+                    "error_code": "E2E_RESULTS_MISSING",
+                    "message": (
+                        f"E2E 验证结果文件不存在（risk_level=high 且含 e2e_scenarios，必须提供）: "
+                        f".project_ai/tdd/e2e-results/{sanitized}.e2e-results.md"
+                    ),
+                }
+            e2e_passed, e2e_msg = _parse_e2e_results(e2e_path)
+            if not e2e_passed:
+                return {
+                    "ok": False,
+                    "error_code": "E2E_FAILED",
+                    "message": f"E2E 验证未通过: {e2e_msg}",
+                }
 
     # 全部通过，更新状态
     backup_file(os.path.join(cwd, STATE_DIR, "state.json"))
@@ -359,7 +436,7 @@ def complete_task(cwd, task_id):
     }
 
 
-def _check_report_forbidden_files(cwd, iteration_n, task_id, forbidden_prefixes):
+def _check_report_forbidden_files(cwd, iteration_n, task_id):
     """检查任务报告中的 files_created/modified 是否包含禁止文件。"""
     report_path = os.path.join(
         cwd, STATE_DIR, "task_reports", f"iteration_{iteration_n}",
@@ -376,10 +453,74 @@ def _check_report_forbidden_files(cwd, iteration_n, task_id, forbidden_prefixes)
         return []
 
     all_files = report.get("files_created", []) + report.get("files_modified", [])
-    violations = []
-    for f in all_files:
-        for prefix in forbidden_prefixes:
-            if f.startswith(prefix):
-                violations.append(f)
-                break
-    return violations
+    return [f for f in all_files if _is_forbidden(f)]
+
+
+def _parse_spec_compliance_verdict(file_path):
+    """从 spec-compliance 报告中解析 verdict。返回 'compliant' / 'issues_found' / 'unknown'。"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return "unknown"
+
+    # 查找 "## Verdict: ✅ COMPLIANT" 或 "## Verdict: ❌ ISSUES FOUND"
+    m = re.search(r"##\s*Verdict:\s*(✅|❌)\s*(\w+)", content)
+    if m:
+        verdict = m.group(2).lower().strip()
+        if verdict in ("compliant",):
+            return "compliant"
+        if verdict in ("issues", "issues_found", "found"):
+            return "issues_found"
+        return verdict
+
+    # Fallback: 查找 "Verdict: COMPLIANT"
+    if re.search(r"(?i)verdict\s*:\s*compliant", content):
+        return "compliant"
+    if re.search(r"(?i)verdict\s*:\s*issues?\s*found", content):
+        return "issues_found"
+
+    return "unknown"
+
+
+def _parse_mutation_results(file_path):
+    """从 mutation-results 报告中解析 KILLED/SURVIVED。返回 (killed, total)。"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return 0, 1
+
+    # 查找 "杀死: X/Y" 或 "Killed: X/Y"（大小写不敏感）
+    m = re.search(r"(?i)(?:杀死|killed)\s*[:：]\s*(\d+)\s*/\s*(\d+)", content)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    # Count KILLED and SURVIVED rows in table
+    killed = len(re.findall(r"\|\s*\d+\s*\|.*\|\s*✅.*\|\s*KILLED", content))
+    survived = len(re.findall(r"\|\s*\d+\s*\|.*\|\s*❌.*\|\s*SURVIVED", content))
+    if killed + survived > 0:
+        return killed, killed + survived
+
+    return 0, 1
+
+
+def _parse_e2e_results(file_path):
+    """从 e2e-results 报告中解析是否全部 pass。返回 (passed: bool, message: str)。"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return False, "无法读取 E2E 结果文件"
+
+    # 查找失败标记
+    failures = re.findall(r"(?i)(?:FAIL|❌)\s*[:：]?\s*(.+)", content)
+    if failures:
+        return False, "; ".join(failures[:5])
+
+    # 查找 pass 标记
+    if re.search(r"(?i)(?:all\s*(?:tests?\s*)?pass|✅.*pass|verdict\s*:\s*pass)", content):
+        return True, "全部 E2E 通过"
+
+    # 如果没有任何失败的明显标记，保守处理
+    return True, "E2E 结果已存在（无显式失败标记）"

@@ -1,7 +1,7 @@
 ---
 name: project-iteration-manager
 description: 产品迭代管理器。文件驱动，脱离对话上下文。管理 产品发现→规划→执行→复盘→打磨→决策 的完整流程。确定性操作交给CLI，AI负责非确定性判断。
-version: 5.3.0
+version: 5.4.0
 ---
 
 # Skill: project-iteration-manager

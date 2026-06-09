@@ -1,7 +1,7 @@
 ---
 name: tdd-implement-feature
 description: 在测试批准后实现功能。不修改测试文件。不修改 spec 文件。
-version: 5.1.0
+version: 5.4.0
 disable-model-invocation: true
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: project-task-runner
 description: 固定任务执行器。不负责产品规划，不负责状态推进。执行前读取任务上下文，只修改允许的文件，完成后生成任务报告。v5.0.0：支持 TDD 模式，自动协调 Test Writer → Test Reviewer → Implementer 三个角色。
-version: 5.3.0
+version: 5.4.0
 ---
 
 # Skill: project-task-runner
