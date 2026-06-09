@@ -146,6 +146,21 @@ Forbidden files modified:
 
 If the forbidden list is NOT empty, report it immediately and do NOT mark the task as done.
 
+# Red Flags — STOP and Self-Correct
+
+These thoughts mean you are rationalizing. Stop immediately.
+
+| Thought | Reality |
+|---------|---------|
+| "The test is wrong, I'll fix it quickly" | You NEVER modify tests. Write a blocker report. The Test Writer and Reviewer fix tests. |
+| "I'll add this small improvement while I'm here" | YAGNI. Build ONLY what the approved tests and spec require. Nothing more. |
+| "I'll just hardcode this value to pass the test, then fix it later" | Hardcoding to pass tests = cheating the process. "Later" never comes. |
+| "This is a trivial one-line change, I don't need to run the tests" | Run. The. Tests. Every. Time. Red before, green after. |
+| "The test passes, I'm done" | Also run: lint, typecheck, boundary check. Green test ≠ complete. |
+| "I know the approval file says to run X, but running Y is faster" | Run the exact command from the approval file. No substitutions. |
+| "I'll refactor this other file too since I understand it now" | You may only edit files in `allowed_files`. Touching anything else = violation. |
+| "The spec seems wrong about this detail, I'll implement it the right way" | Write a blocker report. Do NOT "fix" the spec through implementation. |
+
 # Final response
 
 Summarize:

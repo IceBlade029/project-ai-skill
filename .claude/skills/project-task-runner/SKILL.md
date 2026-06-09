@@ -246,7 +246,100 @@ Implementer 产出：
 
 **子代理返回后验证**：运行 `project-ai tdd check-boundary <task_id>` 确认实现者没有越界修改测试或 spec 文件。如果有违规，**报告用户**，不标记任务完成。
 
-### Phase C2：浏览器 E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
+### Phase C2：Spec Compliance Review（所有 TDD 任务强制，v5.4.0 新增）
+
+实现完成后、E2E 之前，**你必须调用 Agent 工具孵化 Spec Compliance Reviewer 子代理**，验证实现是否真正匹配 spec——不多做、不漏做、不误解。
+
+- `subagent_type`: `"claude"`
+- `description`: `"Spec compliance review for <task_id>"`
+- `prompt`:
+  ```
+  You are a Spec Compliance Reviewer. Your job is adversarial — you do NOT trust
+  the implementer's report. You verify EVERYTHING independently by reading the
+  actual code.
+
+  Task ID: <task_id>
+
+  ## What Was Requested
+
+  1. Read the BDD spec files:
+     <粘贴 tdd.spec_files 列表>
+  2. Read the rule table files:
+     <粘贴 tdd.rule_files 列表>
+  3. Read the task description and acceptance criteria from the plan.
+
+  ## What the Implementer Claims
+
+  <从 .project_ai/tdd/implementation-reports/<task_id>.implementation.md 粘贴实现报告>
+
+  ## Your Job
+
+  Read the IMPLEMENTATION CODE (not the report) and verify:
+
+  ### Missing requirements
+  - Is EVERY acceptance criterion met by actual running code?
+  - Are there spec requirements the implementer skipped or missed?
+  - Did they claim something works but didn't really implement it?
+
+  ### Extra/unneeded work (YAGNI violation)
+  - Did they build things NOT in the spec?
+  - Did they add "nice to haves" that weren't requested?
+  - Did they over-engineer beyond what the spec requires?
+
+  ### Misunderstandings
+  - Did they interpret requirements differently than intended?
+  - Did they solve a different problem than what the spec describes?
+  - Did they implement the right feature in the wrong way?
+
+  ### Spec-to-code traceability
+  - Can you trace every spec scenario to the code that fulfills it?
+  - Are there spec scenarios with NO corresponding code path?
+
+  ## Output
+
+  Write to .project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md:
+
+  ```
+  # Spec Compliance Review — <task_id>
+
+  ## Verdict: ✅ COMPLIANT | ❌ ISSUES FOUND
+
+  ## Missing (spec requires, code doesn't deliver)
+  - [file:line] <具体问题>
+  - ...
+
+  ## Extra (code delivers, spec doesn't require)
+  - [file:line] <具体问题>
+  - ...
+
+  ## Misunderstood (code does something different from spec intent)
+  - [file:line] <具体问题>
+  - ...
+
+  ## Traceability gaps (spec scenario → no matching code path)
+  - Scenario "<name>": no implementation found
+
+  ## Notes
+  <any additional observations>
+  ```
+
+  **CRITICAL**: If you find MISSING or MISUNDERSTOOD issues, the verdict is ❌.
+  Extra features alone may be acceptable if they're trivial, but flag them.
+  ```
+
+Spec Compliance Reviewer 产出：
+- `.project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md`
+
+**子代理返回后处理**：
+- 如果 verdict 是 `❌ ISSUES FOUND`：
+  - 将问题报告给用户
+  - **回退到 Phase C**，将 spec compliance 报告中的问题交给 Implementer 子代理修复
+  - Implementer 修复后，重新运行 Spec Compliance Review
+  - 循环直到 verdict 为 ✅
+- 如果 verdict 是 `✅ COMPLIANT`：
+  - 继续 Phase C3（E2E）或 Phase D（完成）
+
+### Phase C3：浏览器 E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
 
 如果任务的 `tdd.e2e_scenarios` 字段存在且非空，**你必须额外调用一次 Agent 工具**：
 
@@ -286,7 +379,7 @@ Implementer 产出：
      "files_created": ["src/xxx.py"],
      "files_modified": [],
      "exports": ["function xxx()", "class YYY"],
-     "checks": { "test": "passed", "mutation": "<n_killed>/<n_total>", "e2e": "<pass/fail/skipped>" },
+     "checks": { "test": "passed", "spec_compliance": "✅", "mutation": "<n_killed>/<n_total>", "e2e": "<pass/fail/skipped>" },
      "notes": "TDD 流程完成。"
    }
    ```
@@ -295,16 +388,44 @@ Implementer 产出：
    ```
    任务 <task_id> TDD 流程已完成（风险等级: <risk_level>）。
 
-   Test Writer  → .project_ai/tdd/coverage/<task_id>.coverage.md
-   Test Reviewer → .project_ai/tdd/reviews/<task_id>.test-review.md
-   <如果 risk_level >= medium：> Mutation Inject → .project_ai/tdd/mutation-results/<task_id>.mutation-results.md
-   Implementer  → .project_ai/tdd/implementation-reports/<task_id>.implementation.md
-   <如果 risk_level = high：> E2E Results   → .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
+   Test Writer       → .project_ai/tdd/coverage/<task_id>.coverage.md
+   Test Reviewer     → .project_ai/tdd/reviews/<task_id>.test-review.md
+   <如果 risk_level >= medium：> Mutation Inject  → .project_ai/tdd/mutation-results/<task_id>.mutation-results.md
+   Implementer       → .project_ai/tdd/implementation-reports/<task_id>.implementation.md
+   Spec Compliance   → .project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md
+   <如果 risk_level = high：> E2E Results      → .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
 
    请运行以下命令验证并推进状态：
 
      project-ai task complete <task_id> --json
    ```
+
+---
+
+# Red Flags — STOP and Self-Correct
+
+These thoughts mean you are rationalizing. Stop immediately.
+
+## For the Scheduler (TDD flow)
+
+| Thought | Reality |
+|---------|---------|
+| "I can write the tests myself, it's faster than spawning a sub-agent" | Role separation exists for a reason. Three roles in one context = identity play. Agent tool is mandatory. |
+| "This task is simple, I'll skip the Test Reviewer" | Every TDD task goes through all three phases. Simplicity is not an exception. |
+| "The sub-agent failed, I'll fix its output myself" | Fix the CONTEXT you provided, re-dispatch the sub-agent. Never patch sub-agent output manually. |
+| "I'll read the TDD skill file and execute it inline" | You are FORBIDDEN from reading TDD skill files. They are for sub-agents only. |
+| "One combined sub-agent can do test+review+implement" | Three phases = three independent sub-agents. Combining = destroying cognitive isolation. |
+| "I'll skip checking the output files, I'm sure it worked" | Verify every output file exists after each sub-agent returns. No file = phase incomplete. |
+| "This sub-agent is taking too long, let me just do it" | Wait for sub-agent completion. Rushing = quality collapse. |
+
+## For the Standard flow (non-TDD tasks)
+
+| Thought | Reality |
+|---------|---------|
+| "I know the codebase, I don't need to read context_files" | Context files tell you what the planner intended. Skip them = build the wrong thing. |
+| "This file isn't in allowed_files but it's a small change" | allowed_files is a hard boundary. Touching anything outside = violation. Tell the user. |
+| "The quality gate can be checked later" | Quality gates exist for a reason. Check them now or don't claim done. |
+| "Close enough, I'll mark it done" | expected_files must all EXIST and BE CORRECT. "Close enough" = not done. |
 
 ---
 
@@ -326,6 +447,8 @@ Implementer 产出：
 | **TDD: mutation 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |
 | **TDD: e2e 失败（risk=high）** | 报告用户失败场景，要求 Implementer 修复后重新进入 Phase C |
 | **调度器违规：自己写了测试/审查/实现代码** | 立即停止，删除自己写的代码，改为调用 Agent 工具孵化子代理 |
+| **Spec Compliance Review 未通过（❌）** | 将问题回传给 Implementer 子代理修复，修复后重新运行 Spec Compliance Review，循环直到 ✅ |
+| **Spec Compliance Review 发现 extra features** | 标记但不一定阻塞——trivial extras 可接受，significant extras 必须删除 |
 
 ---
 
@@ -348,6 +471,7 @@ project-ai tdd check-boundary <task_id>
 .project_ai/tdd/reviews/<task_id>.test-review.md
 .project_ai/tdd/approvals/<task_id>.approved.md
 .project_ai/tdd/mutation-results/<task_id>.mutation-results.md  （risk_level >= medium）
+.project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md    （所有 TDD 任务）
 .project_ai/tdd/e2e-results/<task_id>.e2e-results.md            （risk_level = high）
 
 # 用户验证命令（执行完提示用户运行）

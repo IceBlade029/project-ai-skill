@@ -180,6 +180,21 @@ Instead, write required changes in `.project_ai/tdd/reviews/<task_id>.test-revie
 
 **重要**：变异注入操作后必须恢复所有临时修改。不得遗留任何注入代码在 src/ 中。
 
+# Red Flags — STOP and Self-Correct
+
+These thoughts mean you are rationalizing. Stop immediately.
+
+| Thought | Reality |
+|---------|---------|
+| "The tests look reasonable, I'll approve" | "Reasonable" is NOT the standard. Ask: could a lazy implementer cheat? If yes, do NOT approve. |
+| "This test is close enough to covering the spec" | Close enough = not covered. Every P0 rule needs concrete test coverage, not "close enough." |
+| "I'll approve now and note the issues for later" | Issues noted but not fixed = issues that will ship. Do NOT approve until tests are strong enough. |
+| "The implementer will probably handle this correctly" | Tests must ENFORCE correctness, not trust it. If a test can be passed by hardcoding, it's weak. |
+| "I've reviewed enough, the Test Writer did a good job" | You are the attacker. Assume the Test Writer missed something. Your job is to find it. |
+| "This mutation survived but it's an unlikely bug" | If a mutation survives, the tests have a blind spot. Likelihood is irrelevant — the gap is real. |
+| "I'll skip the full mutation injection, it takes too long" | For risk_level >= medium, mutation injection is MANDATORY. Skipping it = skipping the strongest verification. |
+| "The coverage report looks complete, I trust it" | Coverage reports are Test Writer claims. You verify independently. Trust nothing. |
+
 # Final response
 
 Summarize:
