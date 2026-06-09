@@ -1,7 +1,7 @@
 ---
 name: project-iteration-manager
 description: 产品迭代管理器。文件驱动，脱离对话上下文。管理 产品发现→规划→执行→复盘→打磨→决策 的完整流程。确定性操作交给CLI，AI负责非确定性判断。
-version: 5.2.0
+version: 5.3.0
 ---
 
 # Skill: project-iteration-manager
@@ -108,7 +108,7 @@ product_discovery → planning → execution → iteration_review
 
 ---
 
-### planning（迭代规划）★ v5.2.0 合并
+### planning（迭代规划）★ v5.2.0 合并 · v5.3.0 BDD 生成
 
 **目标**：一次性完成 Backlog 划分 + 当前迭代详细计划。如果是续轮迭代，自动读取上一轮的接口契约和复盘建议来推荐本轮范围。
 
@@ -130,20 +130,80 @@ product_discovery → planning → execution → iteration_review
      "id": "I<N>_T<序号>",
      "name": "任务名",
      "description": "任务描述",
+     "risk_level": "low|medium|high",
      "dependencies": [],
      "expected_files": ["src/xxx.py"],
      "quality_gates": [],
-     "tdd": { "enabled": true, "test_command": "pytest tests/ -k <filter>", ... }
+     "tdd": {
+       "enabled": true,
+       "test_command": "pytest tests/ -k <filter>",
+       "e2e_scenarios": []
+     }
    }
    ```
-5. **TDD 判定规则**：
+5. **risk_level 判定规则**（v5.3.0 新增）：
+
+   | 等级 | 判定标准 | 验证策略 |
+   |------|---------|---------|
+   | `low` | 纯脚手架、配置文件、文档、简单 CRUD、无外部依赖 | 标准 TDD 三角色 |
+   | `medium`（默认） | 业务逻辑多分支、数据转换、状态管理 | TDD + Test Reviewer 执行至少 3 个变异注入反证 |
+   | `high` | 前端交互（拖拽/异步/路由）、权限/认证、支付/交易、数据一致性关键路径 | TDD + 变异注入 + 浏览器 E2E |
+
+   凡是 `risk_level` 为 `high` 的前端任务，必须在 `tdd.e2e_scenarios` 中列出至少 3 个 E2E 场景，每个场景必须覆盖：真实入口 → 真实操作 → 真实异步状态 → 刷新持久化 → 失败路径。
+
+6. **BDD / Spec 编写规范**（v5.3.0 新增）：
+
+   为防止多 agent 围绕不完备 spec 形成集体盲区，每个 TDD 任务的 spec 必须包含：
+
+   - **Happy path**：至少 1 条正常流程
+   - **Failure paths**：至少 2 条错误/异常路径（API 失败、空数据、超时、无效输入）
+   - **Async states**（前端功能强制）：loading → success / error / empty 三种终态
+   - **User operation sequence**（前端功能强制）：描述真实用户操作序列（点击顺序、等待、刷新），而非抽象状态转换
+
+   示例对比：
+
+   ```
+   ❌ 弱 spec：「用户可以拖拽卡牌到目标区域触发效果」
+   ✅ 强 spec：
+      - 用户从卡牌列表 pointerdown 一张卡牌，拖拽到目标区域 pointerup，触发对应效果动画
+      - 拖拽到非法区域时，卡牌回到原位，显示红色闪烁提示
+      - 拖拽过程中快速连点第二次，不会触发两次效果
+      - 拖拽结束后刷新页面，卡牌位置和效果状态保持一致
+      - API 返回失败时，卡牌回到原位，显示"操作失败，请重试"提示
+   ```
+
+7. **TDD 判定规则**：
    - 实现具体功能（行为可测试）→ `tdd.enabled: true`
    - 初始化项目结构、配置构建工具 → 不启用
    - 编写文档、部署配置 → 不启用
    - 重构（不改变外部行为）→ 不启用，但 TDD 任务必须填写 `tdd.test_command`
-6. **检查依赖环路**：如果任务依赖形成环，立即中断并报错。
-7. 生成 `.project_ai/confirmations/iteration_plan_confirm.md`
-8. 告诉用户："请审阅迭代计划，编辑确认文档后重新运行本 Skill。"
+8. **检查依赖环路**：如果任务依赖形成环，立即中断并报错。
+9. **生成 BDD Spec**（v5.3.0 新增）：对所有 `tdd.enabled = true` 的任务，调用 Agent 工具孵化 bdd-spec-writer 子代理：
+
+   - `subagent_type`: `"claude"`
+   - `description`: `"BDD spec writer for iteration <N>"`
+   - `prompt`:
+     ```
+     Read and execute ALL instructions in .claude/skills/bdd-spec-writer/SKILL.md.
+
+     Iteration: <N>
+     Project type: <从 tech_stack 判断>
+     Tech context: <粘贴 tech_stack.md 关键内容>
+
+     Features to spec:
+     <列出每个 TDD 任务的 name、description、acceptance_criteria、project_type>
+
+     Generate BDD specs for each feature.
+     Output to .project_ai/specs/bdd/ and .project_ai/specs/rules/.
+     ```
+
+   子代理返回后：
+   - 将生成的 `spec_files` 和 `rule_files` 路径回填到对应任务的 `tdd` 字段
+   - 如果子代理报告了 `[NEEDS CLARIFICATION]` 标记，在确认文档中列出这些待澄清项
+   - 如果某个 TDD 任务的 spec 生成失败（子代理报告 coverage gaps 过多），标记该任务为 `blocked`，等待用户澄清后重新生成
+
+10. 生成 `.project_ai/confirmations/iteration_plan_confirm.md`（在任务清单中包含 BDD spec 文件链接）
+11. 告诉用户："请审阅迭代计划和 BDD 规格文档，编辑确认文档后重新运行本 Skill。"
 
 **用户确认后**：
 1. 运行 `project-ai confirm iteration-plan --json`
@@ -156,11 +216,13 @@ product_discovery → planning → execution → iteration_review
 
 ---
 
-### execution（执行督导）
+### execution（执行督导）★ v5.3.0 强制 Agent
 
 **目标**：按依赖顺序调度任务执行。
 
-**你不是代码执行者。** project-task-runner 负责执行单个任务。你负责协调。
+**你不是代码执行者。** project-task-runner 负责执行单个任务。你负责协调调度。
+
+**关键原则**：你必须通过 **Agent 工具孵化 project-task-runner 子代理**来执行每个任务。不要在主对话中直接执行任务——这会破坏角色分离和上下文隔离。
 
 **执行循环**：
 
@@ -168,18 +230,31 @@ product_discovery → planning → execution → iteration_review
 循环：
   1. project-ai task next --json
   2. 如果 has_next == false → 所有任务完成，退出循环
-  3. 获取 task_id，告知用户：
-     "下一个任务：<task_id> — <任务名>。请使用 project-task-runner 执行。"
-  4. project-ai task context <task_id> --json（将上下文提供给 task-runner）
-  5. 用户调用 task-runner 完成任务后：
+  3. 获取 task_id 和 task 信息
+  4. project-ai task context <task_id> --json
+  5. 调用 Agent 工具孵化 project-task-runner 子代理：
+     - subagent_type: "claude"
+     - description: "Execute <task_id>"
+     - prompt:
+       "Read and execute ALL instructions in .claude/skills/project-task-runner/SKILL.md.
+
+        Task ID: <task_id>
+        Task context (from project-ai task context):
+        <粘贴完整 JSON>
+
+        Execute this task according to the instructions in project-task-runner/SKILL.md.
+        When done, summarize the result."
+  6. 子代理完成后，运行：
      project-ai task complete <task_id> --json
-  6. 如果 complete 失败 → 把原因告诉用户，让他们修复
-  7. 如果 complete 成功 → 回到步骤 1
+  7. 如果 complete 失败 → 把原因告诉用户，让他们修复
+  8. 如果 complete 成功 → 回到步骤 1
 ```
 
-**TDD 任务说明**：当任务的 `tdd.enabled` 为 `true` 时，project-task-runner 会自动协调三个 TDD 角色（Test Writer → Test Reviewer → Implementer），通过子代理在独立上下文中执行。
+**TDD 任务说明**：当任务的 `tdd.enabled` 为 `true` 时，project-task-runner 子代理会自动协调三个独立 TDD 子代理（Test Writer → Test Reviewer → Implementer），每个拥有独立上下文，通过文件系统交接。v5.3.0 起，risk_level >= medium 的任务还会自动执行变异注入反证。
 
-**批量执行**：用户可以说"执行所有剩余任务"——你仍然逐个调度，但不等待用户确认每个任务，只在出错时暂停。
+**批量执行**：用户可以说"执行所有剩余任务"——你仍然逐个孵化 task-runner 子代理，但不等待用户确认每个任务，只在出错时暂停。
+
+**重要**：你是调度器，不是执行者。**绝对不要**读取 task-runner 的 SKILL.md 并自己在主对话中执行任务步骤。你必须通过 Agent 工具孵化子代理。
 
 **所有任务完成后**：
 1. 运行 `project-ai advance --event all_tasks_done --json`
@@ -290,10 +365,25 @@ product_discovery → planning → execution → iteration_review
 
 ---
 
-### requirements_revision（需求修订）
+### requirements_revision（需求修订）★ v5.3.0 BDD 同步
 
-（保持原有流程，不变）
-读取新的需求文档 → 分析变更 → 冲突检测 → 生成确认文档 → 用户确认 → 分层更新 Backlog/愿景/技术栈 → 回到 backlog_update。
+**目标**：当用户改变产品方向时，系统性修订需求并同步更新受影响的 BDD spec。
+
+**执行步骤**：
+
+1. 读取用户新增/修改的需求文档（在 `.project_ai/requirements/` 中，以最新时间戳为准）
+2. 与现有 `product_vision.md`、`product_backlog.json` 对比，生成差异报告
+3. 冲突检测：检查新需求是否与现有 Backlog 中已规划/已实现的功能矛盾
+4. 生成 `.project_ai/confirmations/requirements_revision_confirm.md`
+5. 用户确认后，分层更新：
+   - `product_vision.md`（如有战略层面变更）
+   - `product_backlog.json`（调整优先级、新增/删除功能）
+   - `tech_stack.md`（如有技术栈变更）
+6. **更新受影响的 BDD Spec**（v5.3.0 新增）：如果需求修订导致已有 BDD spec 过时：
+   - 识别受影响的功能（Backlog 中标记为 `source: "requirements_revision"` 的条目）
+   - 调用 Agent 工具孵化 bdd-spec-writer 子代理重新生成对应的 `.feature` 和 rule 文件
+   - 回填更新后的 spec_files 路径
+7. 回到 backlog_update。
 
 ---
 
@@ -331,6 +421,10 @@ product_discovery → planning → execution → iteration_review
 10. **打磨阶段是必经阶段**：review 后强制进入 polishing，不可跳过。用户在对话中口述问题，AI 自动填写分类。
 11. **JSON 是机器权威源，Markdown 是用户确认源**。
 12. **向后兼容**：CLI 自动迁移旧 phase 名和 event 名（如 `backlog_planning` → `planning`、`audit_done` → `review_done`）。
+13. **★v5.3.0 强制 Agent**：execution 阶段必须通过 Agent 工具孵化 project-task-runner 子代理。绝对禁止在主对话中直接执行任务。
+14. **★v5.3.0 分级验证**：每个任务必须标注 risk_level（low/medium/high），task-runner 根据等级自动选择验证深度。高风险前端任务必须包含 E2E 场景。
+15. **★v5.3.0 BDD 质量**：每个 TDD 任务的 spec 必须覆盖 happy path、failure paths、async states（前端）、user operation sequence（前端）。
+16. **★v5.3.0 BDD 生成**：planning 阶段必须通过 Agent 工具孵化 bdd-spec-writer 子代理生成 BDD spec，不得要求用户手动编写 .feature 文件。requirements_revision 阶段复用该子代理更新受影响的 spec。
 
 ## 错误处理速查
 

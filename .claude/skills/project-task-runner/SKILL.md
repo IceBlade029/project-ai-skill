@@ -1,7 +1,7 @@
 ---
 name: project-task-runner
 description: 固定任务执行器。不负责产品规划，不负责状态推进。执行前读取任务上下文，只修改允许的文件，完成后生成任务报告。v5.0.0：支持 TDD 模式，自动协调 Test Writer → Test Reviewer → Implementer 三个角色。
-version: 5.2.0
+version: 5.3.0
 ---
 
 # Skill: project-task-runner
@@ -133,78 +133,176 @@ project-ai task context <task_id> --json
 
 ---
 
-## TDD 执行流程（TDD 任务，v5.0.0 新增）
+## TDD 执行流程（TDD 任务，v5.3.0 强制 Agent）
 
-当 `tdd.enabled` 为 `true` 时，你作为调度器，**自动协调三个独立角色**。
+当 `tdd.enabled` 为 `true` 时，你是一个**纯调度器**——你不是测试编写者、不是审查者、不是实现者。
 
-每个角色使用 **Agent 工具**（subagent）独立执行，拥有独立的上下文窗口，通过文件系统交接。
+### ⚠️ 绝对禁止
 
-**全程无需人工确认，自动完成所有三个角色的调度。**
+**你被禁止在主对话中直接执行以下操作：**
+- 禁止直接编写测试代码
+- 禁止直接审查测试内容
+- 禁止直接实现功能代码
+- 禁止读取 TDD 子技能文件后自己扮演该角色
 
-### Phase A：Test Writer（编写测试）
+违反以上任何一条意味着**角色分离完全失效**——三个独立角色退化成了同一 AI 的三种身份扮演，TDD 流程形同虚设。
 
-使用 Agent 工具，以 `.claude/skills/tdd-write-tests/SKILL.md` 的指令孵化 Test Writer 子代理。
+**你必须调用 Agent 工具孵化独立子代理来完成每个 Phase。** 子代理拥有独立上下文窗口，通过文件系统交接，确保真正的认知隔离。
 
-必须传入任务上下文（task_id、spec_files、rule_files、test_style、test_command 等关键信息）。
+### 风险等级与验证深度
 
-Test Writer 将产出：
+检查上下文 JSON 中任务的 `risk_level` 字段（由 planning 阶段标注）：
+
+| risk_level | 验证策略 | Phase 变化 |
+|-----------|---------|-----------|
+| `low` | 标准 TDD 三角色 | 无变化 |
+| `medium` | TDD + Test Reviewer 执行至少 3 个变异注入反证 | Phase B 增加变异注入 |
+| `high`（尤其前端交互） | TDD + 变异注入 + 浏览器 E2E（如任务含 e2e_scenarios） | Phase B + Phase C 后增加 E2E 验证 |
+
+如果 `risk_level` 字段不存在，默认按 `medium` 处理。
+
+---
+
+### Phase A：孵化 Test Writer（编写测试）
+
+**你必须调用 Agent 工具。** 参数如下：
+
+- `subagent_type`: `"claude"`
+- `description`: `"Test Writer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-write-tests/SKILL.md.
+
+  Task context (from project-ai task context <task_id>):
+  <粘贴 project-ai task context 返回的完整 JSON>
+
+  You are an independent Test Writer sub-agent. Your ONLY job is to write tests.
+  Do NOT implement production code. Do NOT review your own tests.
+  When done, output a summary of files created.
+  ```
+
+**必须传入任务上下文**：包含 task_id、spec_files、rule_files、type_files、test_style、test_command。
+
+Test Writer 产出：
 - 测试文件
 - `.project_ai/tdd/coverage/<task_id>.coverage.md`
 - `.project_ai/tdd/red-runs/<task_id>.red-run.md`
 - （可选）`.project_ai/tdd/open-questions/<task_id>.questions.md`
 
-**验证**：Agent 完成后，检查 coverage 和 red-run 文件是否已生成。如果 Test Writer 产生了 open-questions（spec 矛盾等不明确情况），**暂停并向用户报告问题**，等待澄清后再继续。
+**子代理返回后验证**：检查 coverage 和 red-run 文件是否已生成。如果 Test Writer 产生了 open-questions，**暂停并向用户报告问题**，等待澄清后再继续。如果产出文件缺失，**报告用户**，不要继续 Phase B。
 
-### Phase B：Test Reviewer（审查测试）
+### Phase B：孵化 Test Reviewer（审查测试）
 
-使用 Agent 工具，以 `.claude/skills/tdd-review-tests/SKILL.md` 的指令孵化 Test Reviewer 子代理。
+**你必须调用 Agent 工具。** 参数如下：
 
-Test Reviewer 将产出：
+- `subagent_type`: `"claude"`
+- `description`: `"Test Reviewer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-review-tests/SKILL.md.
+
+  Task ID: <task_id>
+  Risk level: <risk_level>
+
+  You are an independent Test Reviewer sub-agent. Your ONLY job is to attack the tests.
+  Do NOT implement production code. Do NOT write tests.
+  When done, output whether tests are approved or not.
+
+  <如果 risk_level 为 medium 或 high，追加：>
+  CRITICAL: This is a medium/high-risk task. After the standard review, you MUST
+  perform the "Mutation Injection" step described in your SKILL.md — generate at
+  least 3 error implementations, inject them, and verify tests catch them.
+  ```
+
+Test Reviewer 产出：
 - `.project_ai/tdd/reviews/<task_id>.test-review.md`
 - `.project_ai/tdd/approvals/<task_id>.approved.md`（如果测试通过审查）
+- （risk_level >= medium）`.project_ai/tdd/mutation-results/<task_id>.mutation-results.md`
 
-**验证**：Agent 完成后，检查 approval 文件是否已生成。如果没有 approval 文件，说明测试质量不达标。**向用户报告审查结果**（review 报告中的弱点），等待测试修复后再继续。
+**子代理返回后验证**：检查 approval 文件是否已生成。如果没有 approval 文件，**向用户报告审查结果**（review 报告中的弱点），等待测试修复后重新进入 Phase A。如果 risk_level >= medium 且 mutation-results 文件缺失，提示 Test Reviewer 补做变异注入。
 
-### Phase C：Implementer（实现功能）
+### Phase C：孵化 Implementer（实现功能）
 
-使用 Agent 工具，以 `.claude/skills/tdd-implement-feature/SKILL.md` 的指令孵化 Implementer 子代理。
+**你必须调用 Agent 工具。** 参数如下：
+
+- `subagent_type`: `"claude"`
+- `description`: `"Implementer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-implement-feature/SKILL.md.
+
+  Task ID: <task_id>
+
+  You are an independent Implementer sub-agent. Your ONLY job is to make
+  approved tests pass. Do NOT modify tests. Do NOT modify specs.
+  When done, output implementation summary and files changed.
+  ```
 
 **前置条件**：必须先运行 `project-ai tdd check-approval <task_id>` 确认 `approved: true`。
 
-Implementer 将产出：
+Implementer 产出：
 - `src/` 下的实现代码
 - `.project_ai/tdd/implementation-reports/<task_id>.implementation.md`
 
-**验证**：Agent 完成后，运行 `project-ai tdd check-boundary <task_id>` 确认实现者没有越界修改测试或 spec 文件。如果有违规，**报告用户**，不标记任务完成。
+**子代理返回后验证**：运行 `project-ai tdd check-boundary <task_id>` 确认实现者没有越界修改测试或 spec 文件。如果有违规，**报告用户**，不标记任务完成。
+
+### Phase C2：浏览器 E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
+
+如果任务的 `tdd.e2e_scenarios` 字段存在且非空，**你必须额外调用一次 Agent 工具**：
+
+- `subagent_type`: `"claude"`
+- `description`: `"E2E verification for <task_id>"`
+- `prompt`:
+  ```
+  You are an E2E verification agent. You must verify the implemented feature
+  against real browser scenarios using Playwright (or equivalent).
+
+  Task ID: <task_id>
+  E2E scenarios:
+  <粘贴 tdd.e2e_scenarios 内容>
+
+  For each scenario:
+  1. Start from a real user entry point (not a mounted component)
+  2. Use real interactions (click, type, drag, keyboard — not direct store manipulation)
+  3. Verify loading, success, error, and empty states
+  4. Refresh the page and verify state persistence
+  5. Verify error/failure paths
+
+  Write results to .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
+  Include: scenario name, status (pass/fail), screenshots if failures, error details.
+  ```
 
 ### Phase D：完成任务
 
-TDD 三个角色都完成后：
+所有 Phase 完成后：
 
 1. 生成任务报告到 `.project_ai/task_reports/iteration_<N>/task_<task_id>_report.json`：
    ```json
    {
      "task_id": "<task_id>",
      "iteration": <N>,
+     "risk_level": "<low|medium|high>",
      "status": "done",
      "files_created": ["src/xxx.py"],
      "files_modified": [],
      "exports": ["function xxx()", "class YYY"],
-     "checks": { "test": "passed" },
-     "notes": "TDD 流程完成。测试已通过。"
+     "checks": { "test": "passed", "mutation": "<n_killed>/<n_total>", "e2e": "<pass/fail/skipped>" },
+     "notes": "TDD 流程完成。"
    }
    ```
 2. 追加完成摘要到 `.project_ai/dev_log.md`
 3. 提示用户：
    ```
-   任务 <task_id> TDD 流程已完成。
-   
+   任务 <task_id> TDD 流程已完成（风险等级: <risk_level>）。
+
    Test Writer  → .project_ai/tdd/coverage/<task_id>.coverage.md
    Test Reviewer → .project_ai/tdd/reviews/<task_id>.test-review.md
+   <如果 risk_level >= medium：> Mutation Inject → .project_ai/tdd/mutation-results/<task_id>.mutation-results.md
    Implementer  → .project_ai/tdd/implementation-reports/<task_id>.implementation.md
-   
+   <如果 risk_level = high：> E2E Results   → .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
+
    请运行以下命令验证并推进状态：
-   
+
      project-ai task complete <task_id> --json
    ```
 
@@ -225,6 +323,9 @@ TDD 三个角色都完成后：
 | **TDD: open-questions 文件存在** | 暂停并向用户报告 spec 矛盾 |
 | **TDD: boundary check 失败** | 报告用户，实现者违规修改了禁止文件 |
 | **TDD: 测试在实现前就通过（绿灯）** | 这是无效测试，不继续实现 |
+| **TDD: mutation 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |
+| **TDD: e2e 失败（risk=high）** | 报告用户失败场景，要求 Implementer 修复后重新进入 Phase C |
+| **调度器违规：自己写了测试/审查/实现代码** | 立即停止，删除自己写的代码，改为调用 Agent 工具孵化子代理 |
 
 ---
 
@@ -241,6 +342,13 @@ project-ai tdd check-boundary <task_id>
 
 # 任务报告路径
 .project_ai/task_reports/iteration_<N>/task_<task_id>_report.json
+
+# TDD 产出（v5.3.0 新增 mutation-results + e2e-results）
+.project_ai/tdd/coverage/<task_id>.coverage.md
+.project_ai/tdd/reviews/<task_id>.test-review.md
+.project_ai/tdd/approvals/<task_id>.approved.md
+.project_ai/tdd/mutation-results/<task_id>.mutation-results.md  （risk_level >= medium）
+.project_ai/tdd/e2e-results/<task_id>.e2e-results.md            （risk_level = high）
 
 # 用户验证命令（执行完提示用户运行）
 project-ai task complete <task_id> --json
