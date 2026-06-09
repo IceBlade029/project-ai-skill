@@ -79,6 +79,10 @@
 ├── dev_log.md               # 开发日志（每轮迭代和任务追加）
 ├── requirements/            # 用户放入需求文档的目录
 ├── confirmations/           # 确认文档（问答式，用户填写）
+├── specs/                   # ★v5.3.0 BDD 规格文件
+│   ├── bdd/                 # Gherkin .feature 场景文件（AI 自动生成）
+│   │   └── coverage-matrix.md
+│   └── rules/               # 规则表、状态机、决策表（AI 自动生成）
 ├── plans/                   # 开发计划
 │   ├── product_vision.md
 │   ├── product_backlog.json
@@ -87,6 +91,16 @@
 │       ├── iteration_1.md
 │       ├── iteration_1_tasks.json
 │       └── ...
+├── tdd/                     # TDD 流程产出
+│   ├── coverage/            # Test Writer 覆盖报告
+│   ├── red-runs/            # 红跑记录
+│   ├── reviews/             # Test Reviewer 审查报告
+│   ├── approvals/           # 批准文件
+│   ├── open-questions/      # Spec 矛盾标记
+│   ├── mutation-results/    # ★v5.3.0 变异注入结果
+│   ├── e2e-results/         # ★v5.3.0 浏览器 E2E 结果
+│   ├── implementation-reports/  # Implementer 实现报告
+│   └── blockers/            # 阻塞报告
 ├── task_reports/            # 每个任务的完成报告
 │   ├── iteration_1/
 │   │   └── task_I1_T01_report.json
@@ -103,16 +117,16 @@
 
 ### 2.2 版本演进
 
-| 目录 | v3.0.0 | v4.0.0 | v4.1.0 | v4.2.0 | v5.0.0 | v5.1.0 |
-|------|--------|--------|--------|--------|--------|--------|
-| `skills/` | 按迭代存放动态生成的子 Skills | **已移除**（改为固定 task-runner） | 不变 | 不变 | **新增 3 个 TDD Skill**：tdd-write-tests、tdd-review-tests、tdd-implement-feature | 不变 |
-| `state.json` | `skill_version: "3.0.0"` | `skill_version: "4.0.0"` | `skill_version: "4.1.0"` | `skill_version: "4.2.0"` | `skill_version: "5.0.0"`，`schema_version: "2.0.0"` | `skill_version: "5.1.0"` |
-| `phase` 值 | 含 `skill_generation` 作为主路径 | `skill_generation` 降级为兼容路径 | 新增 `iteration_polishing` | 新增 `requirements_revision` | 不变（TDD 是任务级特性） | 不变 |
-| 打磨流程 | review → backlog_update（轻量选择） | 同 v3.0.0 | review → **强制 polishing** → backlog_update | **polishing 修复强制通过 task-runner**，问题文档采用增量追加+状态流转 | 不变 | **自动模式**：polishing 修复任务自动循环执行 |
-| 需求管理 | 仅在 product_discovery 阶段一次性读取 | 不变 | 不变 | **支持中继修订**：backlog_update → requirements_revision → backlog_update | 不变 | 不变 |
-| 任务执行 | 动态 Skill 文件 | 固定 task-runner 单角色 | 不变 | 不变 | **TDD 三角色调度**：task-runner 自动协调 Test Writer→Reviewer→Implementer | 不变 |
-| 质量门禁 | 无 | quality_gates 空壳 | 不变 | 不变 | **Approval 门禁 + 文件边界检查**：task complete 新增第 6/7 层验证 | 不变 |
-| 执行流程 | 每任务需用户手动确认 | 不变 | 不变 | 不变 | 不变 | **自动模式**：execution→audit→review 自动推进，polishing 修复自动执行 |
+| 目录 | v3.0.0 | v4.0.0 | v4.1.0 | v4.2.0 | v5.0.0 | v5.1.0 | v5.3.0 |
+|------|--------|--------|--------|--------|--------|--------|--------|
+| `skills/` | 按迭代存放动态生成的子 Skills | **已移除**（改为固定 task-runner） | 不变 | 不变 | **新增 3 个 TDD Skill**：tdd-write-tests、tdd-review-tests、tdd-implement-feature | 不变 | **新增 bdd-spec-writer**：AI 自动生成 BDD spec |
+| `state.json` | `skill_version: "3.0.0"` | `skill_version: "4.0.0"` | `skill_version: "4.1.0"` | `skill_version: "4.2.0"` | `skill_version: "5.0.0"`，`schema_version: "2.0.0"` | `skill_version: "5.1.0"` | `skill_version: "5.3.0"` |
+| `phase` 值 | 含 `skill_generation` 作为主路径 | `skill_generation` 降级为兼容路径 | 新增 `iteration_polishing` | 新增 `requirements_revision` | 不变（TDD 是任务级特性） | 不变 | 不变（9 个 phase） |
+| 打磨流程 | review → backlog_update（轻量选择） | 同 v3.0.0 | review → **强制 polishing** → backlog_update | **polishing 修复强制通过 task-runner**，问题文档采用增量追加+状态流转 | 不变 | **自动模式**：polishing 修复任务自动循环执行 | 不变 |
+| 需求管理 | 仅在 product_discovery 阶段一次性读取 | 不变 | 不变 | **支持中继修订**：backlog_update → requirements_revision → backlog_update | 不变 | 不变 | **BDD 自动生成**：planning 孵化 bdd-spec-writer，requirements_revision 复用更新 |
+| 任务执行 | 动态 Skill 文件 | 固定 task-runner 单角色 | 不变 | 不变 | **TDD 三角色调度**：task-runner 自动协调 Test Writer→Reviewer→Implementer | 不变 | **强制 Agent 子代理**：execution 孵化 task-runner，TDD 角色独立子代理 |
+| 质量门禁 | 无 | quality_gates 空壳 | 不变 | 不变 | **Approval 门禁 + 文件边界检查**：task complete 新增第 6/7 层验证 | 不变 | **变异注入反证 + E2E**：按 risk_level 分级验证 |
+| 执行流程 | 每任务需用户手动确认 | 不变 | 不变 | 不变 | 不变 | **自动模式**：execution→audit→review 自动推进，polishing 修复自动执行 | **BDD→TDD→变异→E2E** 完整质量链 |
 
 ---
 
@@ -463,14 +477,16 @@ v5.0.0 完全向后兼容 v4.2.0 的 `state.json`。`schema_version` 从 `1.0.0`
 ```
 .project_ai/
   specs/
-    bdd/           ← BDD 场景文件（用户编写 .feature）
-    rules/         ← 规则表文件
+    bdd/           ← BDD 场景文件（★v5.3.0 AI 自动生成，不再需要用户手动编写 .feature）
+    rules/         ← 规则表文件（★v5.3.0 AI 自动生成）
   tdd/
     tasks/         ← TDD 任务详细说明
     coverage/      ← 测试覆盖报告
     reviews/       ← 测试审查报告
     red-runs/      ← 红灯运行报告
     approvals/     ← 审批文件（关键门禁）
+    mutation-results/  ← ★v5.3.0 变异注入结果
+    e2e-results/       ← ★v5.3.0 浏览器 E2E 结果
     implementation-reports/  ← 实现报告
     blockers/      ← 阻塞报告
     open-questions/  ← 待澄清问题
