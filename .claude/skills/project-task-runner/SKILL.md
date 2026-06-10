@@ -472,6 +472,8 @@ These thoughts mean you are rationalizing. Stop immediately.
 | **TDD: open-questions 文件存在** | 暂停并向用户报告 spec 矛盾 |
 | **TDD: boundary check 失败** | 报告用户，实现者违规修改了禁止文件 |
 | **TDD: integrity check 失败** | 阶段封存产物被篡改——某个 agent 修改了其他 phase 的裁判文件。检查 manifest 中的 violations。 |
+| **TDD: phase manifest 缺失** | 某必需阶段未运行 seal-phase。每个 TDD phase 完成后必须封存产物。 |
+| **TDD: seal-phase 失败（required 文件缺失）** | 子代理未产出所有必需文件。返回对应 Phase 重新执行子代理。 |
 | **TDD: seal-phase 失败（manifest 已存在）** | 该阶段已被封存过。如果确实需要重新封存，先手动删除旧 manifest。 |
 | **TDD: 测试在实现前就通过（绿灯）** | 这是无效测试，不继续实现 |
 | **TDD: cheating probe 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |

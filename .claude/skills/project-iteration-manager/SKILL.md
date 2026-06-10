@@ -463,6 +463,8 @@ These thoughts mean you are rationalizing. Stop immediately.
 | TDD 流程中 Test Writer 产生 open-questions | spec 存在矛盾或模糊，请求用户澄清 |
 | TDD 流程中 Test Reviewer 未生成 approval | 测试质量不达标，阅读 review 报告改进 |
 | TDD 流程中 seal-phase 返回 MANIFEST_ALREADY_EXISTS | 该阶段已封存。如果需重新封存，手动删除旧 manifest 后重试 |
+| task complete 返回 TDD_PHASE_MANIFEST_MISSING | 某必需阶段未封存。检查是否每个 phase 结束后都运行了 seal-phase |
+| TDD 流程中 seal-phase 返回 PHASE_REQUIRED_OUTPUTS_MISSING | 子代理未产出必需文件。回退到对应 Phase 重新执行 |
 
 ## 参考文档
 

@@ -85,9 +85,9 @@ PHASE_OUTPUTS = {
         "label": "Phase B — Test Reviewer",
         "required": [
             ".project_ai/tdd/reviews/{task_id}.test-review.md",
+            ".project_ai/tdd/approvals/{task_id}.approved.md",
         ],
         "optional": [
-            ".project_ai/tdd/approvals/{task_id}.approved.md",
             ".project_ai/tdd/cheating-probe-results/{task_id}.cheating-probe.md",
         ],
     },
@@ -377,7 +377,13 @@ def check_file_boundary(cwd, allowed_files, task_id=None):
         return True, [], [], "none"
 
     # 1. forbidden 检查
-    forbidden_violations = [f for f in all_changed if _is_forbidden(f)]
+    # manifest 文件是 CLI 产物（seal-phase 写入），不是 agent 修改，
+    # 必须从 forbidden 检查中排除，否则正常流程会被 TDD_FORBIDDEN_FILES_MODIFIED 卡死。
+    # manifest 自身的防篡改由 _check_integrity 的 hash 比对保证。
+    MANIFEST_SKIP_PREFIX = ".project_ai/tdd/manifests/"
+    forbidden_violations = [f for f in all_changed
+                            if _is_forbidden(f)
+                            and not f.startswith(MANIFEST_SKIP_PREFIX)]
 
     # 2. allowed 检查：生产代码（非 .project_ai/ 目录）必须在 allowed_files 内
     # 以下是已知的流程文件前缀，不受 allowed_files 限制
@@ -471,13 +477,25 @@ def _seal_phase(cwd, task_id, phase):
         if file_path not in files:
             missing.append(file_path)
 
+    # 必需文件缺失 → 拒绝封存，不写入 manifest
+    if missing:
+        return {
+            "ok": False,
+            "error_code": "PHASE_REQUIRED_OUTPUTS_MISSING",
+            "message": (
+                f"阶段 {phase} 缺少必需的产出文件，无法封存: {missing}。"
+                "请确保子代理已完成所有必需产出后再运行 seal-phase。"
+            ),
+            "phase": phase,
+            "missing_required": missing,
+        }
+
     manifest = {
         "task_id": task_id,
         "phase": phase,
         "phase_label": outputs["label"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "files": files,
-        "missing_required": missing,
     }
 
     os.makedirs(manifest_dir, exist_ok=True)
@@ -490,7 +508,6 @@ def _seal_phase(cwd, task_id, phase):
         "phase_label": outputs["label"],
         "task_id": task_id,
         "files_sealed": len(files),
-        "missing_required": missing,
         "manifest_path": os.path.join(
             ".project_ai", "tdd", "manifests", f"{sanitized}.{phase}.manifest.json"
         ),

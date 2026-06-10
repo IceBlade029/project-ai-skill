@@ -339,6 +339,26 @@ def complete_task(cwd, task_id):
                 "phases_checked": integrity.get("phases_checked", 0),
             }
 
+        # 6a-2. 检查必需的 phase manifest 是否存在（v5.5.0）
+        phases_found = set(integrity.get("phases_found", []))
+        required_phases = {"test_writer", "test_reviewer", "implementer", "spec_compliance"}
+        if risk_level == "high" and tdd_config.get("e2e_scenarios"):
+            required_phases.add("e2e")
+        missing_phases = required_phases - phases_found
+        if missing_phases:
+            return {
+                "ok": False,
+                "error_code": "TDD_PHASE_MANIFEST_MISSING",
+                "message": (
+                    f"以下必需阶段的 manifest 缺失: {sorted(missing_phases)}。"
+                    "每个 TDD phase 完成后必须运行 project-ai tdd seal-phase 封存产物。"
+                    f"已找到的阶段: {sorted(phases_found) if phases_found else ['无']}。"
+                ),
+                "required_phases": sorted(required_phases),
+                "missing_phases": sorted(missing_phases),
+                "phases_found": sorted(phases_found),
+            }
+
         # 6b. 审批文件
         approval_path = os.path.join(
             cwd, STATE_DIR, "tdd", "approvals", f"{sanitized}.approved.md"
