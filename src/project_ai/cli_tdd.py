@@ -8,28 +8,20 @@ import subprocess
 from project_ai.state import STATE_DIR, load_state
 
 # v5.5.0: 全面禁止修改的前缀和文件模式
+#
+# 原则：FORBIDDEN_PREFIXES 只放"任何 agent 在任何情况下都不能碰"的目录。
+# 各 TDD 子代理的正常产出（coverage/ reviews/ approvals/ spec-compliance/
+# cheating-probe-results/ mutation-results/ e2e-results/ implementation-reports/
+# blockers/ 等）不在此列——它们由独立子代理通过 SKILL.md 角色分离来保护，
+# 不能放在全局 forbidden list 中，否则 git-diff 检查会拦截正常流程产物。
 FORBIDDEN_PREFIXES = [
-    # 测试目录（永远禁止实现代理修改）
+    # 测试目录（任何 agent 都不能碰）
     "tests/",
     "test/",
     "e2e/",
     "__tests__/",
-    # Spec / BDD（永远禁止实现代理修改）
+    # Spec / BDD（任何 agent 都不能碰，仅 bdd-spec-writer / iteration-manager 可写）
     ".project_ai/specs/",
-    # TDD 流程产物（各角色独立产出，实现代理禁止修改）
-    ".project_ai/tdd/coverage/",
-    ".project_ai/tdd/reviews/",
-    ".project_ai/tdd/approvals/",
-    ".project_ai/tdd/red-runs/",
-    ".project_ai/tdd/spec-compliance/",
-    ".project_ai/tdd/cheating-probe-results/",
-    ".project_ai/tdd/mutation-results/",
-    ".project_ai/tdd/post-green-mutation-results/",
-    ".project_ai/tdd/e2e-results/",
-    ".project_ai/tdd/open-questions/",
-    # TDD 实现产物（仅实现代理可写）
-    ".project_ai/tdd/implementation-reports/",
-    ".project_ai/tdd/blockers/",
     # 项目关键文件（仅 CLI / iteration-manager 可写，任何任务代理禁止修改）
     ".project_ai/state.json",
     ".project_ai/plans/",
