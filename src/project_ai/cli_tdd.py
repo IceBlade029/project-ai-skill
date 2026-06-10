@@ -1,9 +1,11 @@
 """tdd 命令 — TDD 流程专用操作."""
 
 import os
+import hashlib
 import json
 import fnmatch
 import subprocess
+from datetime import datetime, timezone
 
 from project_ai.state import STATE_DIR, load_state
 
@@ -28,6 +30,8 @@ FORBIDDEN_PREFIXES = [
     ".project_ai/requirements/",
     ".project_ai/iteration_reports/",
     ".project_ai/confirmations/",
+    # 阶段封存清单（仅 CLI 可写，防止代理篡改 manifest）
+    ".project_ai/tdd/manifests/",
 ]
 
 FORBIDDEN_FILE_PATTERNS = [
@@ -64,6 +68,56 @@ FORBIDDEN_FILE_PATTERNS = [
     ".env.*",
 ]
 
+# v5.5.0: 阶段封存 — 每个 TDD phase 的产出文件清单
+# {task_id} 会在运行时替换为 sanitized task_id
+PHASE_OUTPUTS = {
+    "test_writer": {
+        "label": "Phase A — Test Writer",
+        "required": [
+            ".project_ai/tdd/coverage/{task_id}.coverage.md",
+            ".project_ai/tdd/red-runs/{task_id}.red-run.md",
+        ],
+        "optional": [
+            ".project_ai/tdd/open-questions/{task_id}.questions.md",
+        ],
+    },
+    "test_reviewer": {
+        "label": "Phase B — Test Reviewer",
+        "required": [
+            ".project_ai/tdd/reviews/{task_id}.test-review.md",
+        ],
+        "optional": [
+            ".project_ai/tdd/approvals/{task_id}.approved.md",
+            ".project_ai/tdd/cheating-probe-results/{task_id}.cheating-probe.md",
+        ],
+    },
+    "implementer": {
+        "label": "Phase C — Implementer",
+        "required": [
+            ".project_ai/tdd/implementation-reports/{task_id}.implementation.md",
+        ],
+        "optional": [
+            ".project_ai/tdd/blockers/{task_id}.blockers.md",
+        ],
+    },
+    "spec_compliance": {
+        "label": "Phase C2 — Spec Compliance Review",
+        "required": [
+            ".project_ai/tdd/spec-compliance/{task_id}.spec-compliance.md",
+        ],
+        "optional": [],
+    },
+    "e2e": {
+        "label": "Phase C3 — E2E Verification",
+        "required": [
+            ".project_ai/tdd/e2e-results/{task_id}.e2e-results.md",
+        ],
+        "optional": [],
+    },
+}
+
+MANIFESTS_DIR = os.path.join(STATE_DIR, "tdd", "manifests")
+
 
 def _is_forbidden(file_path):
     """检查文件路径是否命中任何禁止规则。"""
@@ -90,6 +144,10 @@ def run(cwd, args):
         return _check_approval(cwd, args.task_id)
     elif args.tdd_command == "check-boundary":
         return _check_boundary(cwd, args.task_id)
+    elif args.tdd_command == "seal-phase":
+        return _seal_phase(cwd, args.task_id, getattr(args, "phase", ""))
+    elif args.tdd_command == "check-integrity":
+        return _check_integrity(cwd, args.task_id)
     else:
         return {
             "ok": False,
@@ -362,6 +420,165 @@ def _check_boundary_from_report(cwd, task_id, allowed_files):
 
     passed = len(forbidden_violations) == 0 and len(extra_files) == 0
     return passed, forbidden_violations, extra_files, "report_check"
+
+
+def _seal_phase(cwd, task_id, phase):
+    """封存一个 TDD 阶段的产物文件（v5.5.0 阶段封存机制）。
+
+    对当前 phase 的所有必需+可选文件做 SHA256 哈希，
+    写入 .project_ai/tdd/manifests/<task_id>.<phase>.manifest.json。
+    如果该 phase 的 manifest 已存在，拒绝覆盖（防止后续 agent 重新封存）。
+    """
+    sanitized = task_id.replace("/", "_").replace("\\", "_")
+
+    if phase not in PHASE_OUTPUTS:
+        return {
+            "ok": False,
+            "error_code": "UNKNOWN_PHASE",
+            "message": f"未知阶段: {phase}。有效阶段: {list(PHASE_OUTPUTS.keys())}",
+        }
+
+    outputs = PHASE_OUTPUTS[phase]
+
+    # 检查 manifest 是否已存在（防止后续 agent 重新封存覆盖正确 hash）
+    manifest_dir = os.path.join(cwd, MANIFESTS_DIR)
+    manifest_path = os.path.join(manifest_dir, f"{sanitized}.{phase}.manifest.json")
+    if os.path.isfile(manifest_path):
+        return {
+            "ok": False,
+            "error_code": "MANIFEST_ALREADY_EXISTS",
+            "message": (
+                f"阶段 {phase} 的 manifest 已存在: "
+                f".project_ai/tdd/manifests/{sanitized}.{phase}.manifest.json。"
+                "如需重新封存，请先手动删除旧 manifest。"
+            ),
+        }
+
+    # 收集并哈希所有存在的文件
+    files = {}
+    for template in outputs["required"] + outputs["optional"]:
+        file_path = template.format(task_id=sanitized)
+        full_path = os.path.join(cwd, file_path)
+        if os.path.isfile(full_path):
+            with open(full_path, "rb") as f:
+                content = f.read()
+            files[file_path] = "sha256:" + hashlib.sha256(content).hexdigest()
+
+    # 检查必需文件
+    missing = []
+    for template in outputs["required"]:
+        file_path = template.format(task_id=sanitized)
+        if file_path not in files:
+            missing.append(file_path)
+
+    manifest = {
+        "task_id": task_id,
+        "phase": phase,
+        "phase_label": outputs["label"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "files": files,
+        "missing_required": missing,
+    }
+
+    os.makedirs(manifest_dir, exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    return {
+        "ok": True,
+        "phase": phase,
+        "phase_label": outputs["label"],
+        "task_id": task_id,
+        "files_sealed": len(files),
+        "missing_required": missing,
+        "manifest_path": os.path.join(
+            ".project_ai", "tdd", "manifests", f"{sanitized}.{phase}.manifest.json"
+        ),
+    }
+
+
+def _check_integrity(cwd, task_id):
+    """检查所有已封存阶段的产物完整性（v5.5.0 阶段封存机制）。
+
+    读取 .project_ai/tdd/manifests/<task_id>.*.manifest.json，
+    逐一验证每个文件的当前 SHA256 是否与封存时一致。
+    任何不匹配（文件缺失、内容被修改）均视为完整性违规。
+    """
+    sanitized = task_id.replace("/", "_").replace("\\", "_")
+    manifest_dir = os.path.join(cwd, MANIFESTS_DIR)
+
+    if not os.path.isdir(manifest_dir):
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "phases_checked": 0,
+            "phases_found": [],
+            "violations": [],
+            "intact": True,
+        }
+
+    # 收集当前任务的所有 manifest
+    manifests = []
+    try:
+        for entry in sorted(os.listdir(manifest_dir)):
+            if not entry.startswith(sanitized + ".") or not entry.endswith(".manifest.json"):
+                continue
+            manifest_path = os.path.join(manifest_dir, entry)
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifests.append(json.load(f))
+    except OSError:
+        return {
+            "ok": False,
+            "error_code": "INTEGRITY_CHECK_ERROR",
+            "message": "无法读取 manifests 目录。",
+        }
+
+    # 验证每个 manifest 中的每个文件
+    violations = []
+    for manifest in manifests:
+        phase = manifest.get("phase", "unknown")
+        for file_path, expected_hash in manifest.get("files", {}).items():
+            full_path = os.path.join(cwd, file_path)
+            if not os.path.isfile(full_path):
+                violations.append({
+                    "phase": phase,
+                    "file": file_path,
+                    "issue": "missing",
+                    "detail": f"封存的文件已不存在",
+                })
+                continue
+
+            try:
+                with open(full_path, "rb") as f:
+                    current_hash = "sha256:" + hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                violations.append({
+                    "phase": phase,
+                    "file": file_path,
+                    "issue": "unreadable",
+                    "detail": "无法读取文件",
+                })
+                continue
+
+            if current_hash != expected_hash:
+                violations.append({
+                    "phase": phase,
+                    "file": file_path,
+                    "issue": "tampered",
+                    "detail": f"文件内容已被修改（封存 hash: {expected_hash[:16]}..., 当前 hash: {current_hash[:16]}...）",
+                })
+
+    # 检查哪些 phase 已有封存记录
+    phases_found = [m.get("phase", "?") for m in manifests]
+
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "phases_checked": len(manifests),
+        "phases_found": phases_found,
+        "violations": violations,
+        "intact": len(violations) == 0,
+    }
 
 
 def _find_task(state, task_id):

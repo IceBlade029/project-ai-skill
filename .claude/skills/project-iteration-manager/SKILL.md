@@ -458,8 +458,11 @@ These thoughts mean you are rationalizing. Stop immediately.
 | polishing 中 expectation_change 与愿景冲突 | 明确告知冲突点，让用户决策 |
 | task complete 返回 TDD_APPROVAL_MISSING | 测试未通过审查，确认 Test Writer 和 Test Reviewer 流程已完成 |
 | task complete 返回 TDD_FORBIDDEN_FILES_MODIFIED | 实现者修改了禁止文件，检查实现报告 |
+| task complete 返回 TDD_INTEGRITY_VIOLATION | 阶段封存产物被篡改——某个 agent 修改了其他 phase 的裁判文件。检查 manifest 中的 violations 定位被篡改文件 |
+| task complete 返回 TDD_FILES_OUTSIDE_ALLOWED | 实现者修改了不在 allowed_files 中的生产文件，属于越界 |
 | TDD 流程中 Test Writer 产生 open-questions | spec 存在矛盾或模糊，请求用户澄清 |
 | TDD 流程中 Test Reviewer 未生成 approval | 测试质量不达标，阅读 review 报告改进 |
+| TDD 流程中 seal-phase 返回 MANIFEST_ALREADY_EXISTS | 该阶段已封存。如果需重新封存，手动删除旧 manifest 后重试 |
 
 ## 参考文档
 

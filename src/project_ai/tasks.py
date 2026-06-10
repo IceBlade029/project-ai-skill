@@ -1,11 +1,11 @@
-"""任务管理 — next / context / complete / sync."""
+﻿"""任务管理 — next / context / complete / sync."""
 
 import os
 import re
 import json
 from project_ai.state import STATE_DIR, load_state, save_state
 from project_ai.utils import backup_file, now_iso
-from project_ai.cli_tdd import _is_forbidden, _run_test, check_file_boundary
+from project_ai.cli_tdd import _is_forbidden, _run_test, _check_integrity, check_file_boundary
 
 
 def sync_tasks(cwd):
@@ -315,13 +315,31 @@ def complete_task(cwd, task_id):
             "missing_files": missing_files,
         }
 
-    # 6. TDD 审批门禁（v5.5.0 重构：fresh test run + git boundary + allowed_files + cheating-probe）
+    # 6. TDD 审批门禁（v5.5.0 重构：integrity → fresh test → boundary → verdict parsing）
     tdd_config = task.get("tdd", {})
     if isinstance(tdd_config, dict) and tdd_config.get("enabled", False):
         sanitized = task_id.replace("/", "_").replace("\\", "_")
         risk_level = task.get("risk_level", "medium")
 
-        # 6a. 审批文件
+        # 6a. 阶段完整性检查（v5.5.0 新增 — 验证所有已封存阶段产物未被篡改）
+        integrity = _check_integrity(cwd, task_id)
+        if integrity.get("violations"):
+            viol_details = "; ".join(
+                f"{v['phase']}/{v['file']}: {v['issue']}"
+                for v in integrity["violations"][:10]
+            )
+            return {
+                "ok": False,
+                "error_code": "TDD_INTEGRITY_VIOLATION",
+                "message": (
+                    f"阶段产物完整性检查失败——以下文件在封存后被修改或删除: {viol_details}。"
+                    "裁判产物不可篡改。请检查是否有 agent 越界修改了其他阶段的产出文件。"
+                ),
+                "integrity_violations": integrity["violations"],
+                "phases_checked": integrity.get("phases_checked", 0),
+            }
+
+        # 6b. 审批文件
         approval_path = os.path.join(
             cwd, STATE_DIR, "tdd", "approvals", f"{sanitized}.approved.md"
         )
@@ -335,7 +353,7 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 6b. Fresh test run（v5.5.0 新增 — 最终裁判亲自跑测试）
+        # 6c. Fresh test run（v5.5.0 新增 — 最终裁判亲自跑测试）
         test_result = _run_test(cwd, task_id)
         if not test_result.get("ok", False):
             return {
@@ -357,7 +375,7 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 6c. 文件边界检查（v5.5.0 升级 — git diff + allowed_files 双重门禁）
+        # 6d. 文件边界检查（v5.5.0 升级 — git diff + allowed_files 双重门禁）
         allowed_files = task.get("expected_files", [])
         boundary_passed, forbidden_violations, extra_files, boundary_method = \
             check_file_boundary(cwd, allowed_files, task_id=task_id)
@@ -391,7 +409,7 @@ def complete_task(cwd, task_id):
                 "message": f"文件边界检查未通过（检测方式: {boundary_method}）。",
             }
 
-        # 6d. Spec Compliance Review 门禁（v5.4.0）
+        # 6e. Spec Compliance Review 门禁（v5.4.0）
         sc_path = os.path.join(
             cwd, STATE_DIR, "tdd", "spec-compliance", f"{sanitized}.spec-compliance.md"
         )
@@ -416,7 +434,7 @@ def complete_task(cwd, task_id):
                 ),
             }
 
-        # 6e. Cheating Implementation Probe（v5.5.0 — 独立路径，Phase B 产出）
+        # 6f. Cheating Implementation Probe（v5.5.0 — 独立路径，Phase B 产出）
         if risk_level in ("medium", "high"):
             cp_path = os.path.join(
                 cwd, STATE_DIR, "tdd", "cheating-probe-results", f"{sanitized}.cheating-probe.md"
@@ -453,7 +471,7 @@ def complete_task(cwd, task_id):
                     ),
                 }
 
-        # 6f. Post-Green Mutation Testing（v5.5.0 新增 — Phase C 后，仅 high）
+        # 6g. Post-Green Mutation Testing（v5.5.0 新增 — Phase C 后，仅 high）
         if risk_level == "high":
             pgm_path = os.path.join(
                 cwd, STATE_DIR, "tdd", "mutation-results", f"{sanitized}.mutation-results.md"
@@ -471,7 +489,7 @@ def complete_task(cwd, task_id):
                     }
             # 注意：post-green mutation 文件不存在时仅警告，不阻塞（该功能尚未在所有流程中强制）
 
-        # 6g. E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
+        # 6h. E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
         e2e_scenarios = tdd_config.get("e2e_scenarios", [])
         if risk_level == "high" and e2e_scenarios:
             e2e_path = os.path.join(

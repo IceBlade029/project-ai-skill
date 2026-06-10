@@ -191,6 +191,14 @@ Test Writer 产出：
 
 **子代理返回后验证**：检查 coverage 和 red-run 文件是否已生成。如果 Test Writer 产生了 open-questions，**暂停并向用户报告问题**，等待澄清后再继续。如果产出文件缺失，**报告用户**，不要继续 Phase B。
 
+**验证通过后，立即封存 Phase A 产物**：
+
+```
+project-ai tdd seal-phase <task_id> test_writer --json
+```
+
+如果返回 `ok: false`（如 manifest 已存在），报告用户，不要继续。
+
 ### Phase B：孵化 Test Reviewer（审查测试）
 
 **你必须调用 Agent 工具。** 参数如下：
@@ -221,6 +229,14 @@ Test Reviewer 产出：
 
 **子代理返回后验证**：检查 approval 文件是否已生成。如果没有 approval 文件，**向用户报告审查结果**（review 报告中的弱点），等待测试修复后重新进入 Phase A。如果 risk_level >= medium 且 cheating-probe 文件缺失，提示 Test Reviewer 补做 Cheating Implementation Probe。
 
+**验证通过后，立即封存 Phase B 产物**：
+
+```
+project-ai tdd seal-phase <task_id> test_reviewer --json
+```
+
+如果返回 `ok: false`，报告用户，不要继续。
+
 ### Phase C：孵化 Implementer（实现功能）
 
 **你必须调用 Agent 工具。** 参数如下：
@@ -245,6 +261,14 @@ Implementer 产出：
 - `.project_ai/tdd/implementation-reports/<task_id>.implementation.md`
 
 **子代理返回后验证**：运行 `project-ai tdd check-boundary <task_id>` 确认实现者没有越界修改测试或 spec 文件。如果有违规，**报告用户**，不标记任务完成。
+
+**验证通过后，立即封存 Phase C 产物**：
+
+```
+project-ai tdd seal-phase <task_id> implementer --json
+```
+
+如果返回 `ok: false`，报告用户，不要继续。
 
 ### Phase C2：Spec Compliance Review（所有 TDD 任务强制，v5.4.0 新增）
 
@@ -337,6 +361,10 @@ Spec Compliance Reviewer 产出：
   - Implementer 修复后，重新运行 Spec Compliance Review
   - 循环直到 verdict 为 ✅
 - 如果 verdict 是 `✅ COMPLIANT`：
+  - **立即封存 Phase C2 产物**：
+    ```
+    project-ai tdd seal-phase <task_id> spec_compliance --json
+    ```
   - 继续 Phase C3（E2E）或 Phase D（完成）
 
 ### Phase C3：浏览器 E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
@@ -443,6 +471,8 @@ These thoughts mean you are rationalizing. Stop immediately.
 | **TDD: approval 文件未生成** | 报告审查结果，等待测试修复 |
 | **TDD: open-questions 文件存在** | 暂停并向用户报告 spec 矛盾 |
 | **TDD: boundary check 失败** | 报告用户，实现者违规修改了禁止文件 |
+| **TDD: integrity check 失败** | 阶段封存产物被篡改——某个 agent 修改了其他 phase 的裁判文件。检查 manifest 中的 violations。 |
+| **TDD: seal-phase 失败（manifest 已存在）** | 该阶段已被封存过。如果确实需要重新封存，先手动删除旧 manifest。 |
 | **TDD: 测试在实现前就通过（绿灯）** | 这是无效测试，不继续实现 |
 | **TDD: cheating probe 未全部杀死（risk>=medium）** | 报告用户哪些变异漏过了测试，要求 Test Writer 补测试后重新进入 Phase A |
 | **TDD: e2e 失败（risk=high）** | 报告用户失败场景，要求 Implementer 修复后重新进入 Phase C |
@@ -458,10 +488,12 @@ These thoughts mean you are rationalizing. Stop immediately.
 # 获取任务上下文（每次必做）
 project-ai task context <task_id> --json
 
-# TDD 命令（v5.0.0 新增）
+# TDD 命令
 project-ai tdd run-test <task_id>
 project-ai tdd check-approval <task_id>
 project-ai tdd check-boundary <task_id>
+project-ai tdd seal-phase <task_id> <phase>       （v5.5.0 阶段封存）
+project-ai tdd check-integrity <task_id>          （v5.5.0 完整性检查）
 
 # 任务报告路径
 .project_ai/task_reports/iteration_<N>/task_<task_id>_report.json
@@ -474,6 +506,9 @@ project-ai tdd check-boundary <task_id>
 .project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md        （所有 TDD 任务 · Phase C2）
 .project_ai/tdd/mutation-results/<task_id>.mutation-results.md      （risk_level = high · Phase C 后）
 .project_ai/tdd/e2e-results/<task_id>.e2e-results.md                （risk_level = high）
+
+# 阶段封存清单（v5.5.0 · CLI 自动生成，禁止手动修改）
+.project_ai/tdd/manifests/<task_id>.<phase>.manifest.json
 
 # 用户验证命令（执行完提示用户运行）
 project-ai task complete <task_id> --json
