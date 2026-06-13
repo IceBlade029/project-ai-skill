@@ -54,6 +54,12 @@ def main():
     p_check_approval.add_argument("task_id", help="任务 ID")
     p_check_boundary = tdd_sub.add_parser("check-boundary", parents=[_parent], help="检查文件边界违规")
     p_check_boundary.add_argument("task_id", help="任务 ID")
+    # v5.5.0: 阶段封存与完整性检查
+    p_seal_phase = tdd_sub.add_parser("seal-phase", parents=[_parent], help="封存 TDD 阶段产物")
+    p_seal_phase.add_argument("task_id", help="任务 ID")
+    p_seal_phase.add_argument("phase", help="阶段名称 (test_writer/test_reviewer/implementer/spec_compliance/e2e)")
+    p_check_integrity = tdd_sub.add_parser("check-integrity", parents=[_parent], help="检查阶段产物完整性")
+    p_check_integrity.add_argument("task_id", help="任务 ID")
 
     args = parser.parse_args()
 

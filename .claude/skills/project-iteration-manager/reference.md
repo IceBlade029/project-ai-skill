@@ -117,16 +117,16 @@
 
 ### 2.2 版本演进
 
-| 目录 | v3.0.0 | v4.0.0 | v4.1.0 | v4.2.0 | v5.0.0 | v5.1.0 | v5.3.0 |
-|------|--------|--------|--------|--------|--------|--------|--------|
-| `skills/` | 按迭代存放动态生成的子 Skills | **已移除**（改为固定 task-runner） | 不变 | 不变 | **新增 3 个 TDD Skill**：tdd-write-tests、tdd-review-tests、tdd-implement-feature | 不变 | **新增 bdd-spec-writer**：AI 自动生成 BDD spec |
-| `state.json` | `skill_version: "3.0.0"` | `skill_version: "4.0.0"` | `skill_version: "4.1.0"` | `skill_version: "4.2.0"` | `skill_version: "5.0.0"`，`schema_version: "2.0.0"` | `skill_version: "5.1.0"` | `skill_version: "5.3.0"` |
-| `phase` 值 | 含 `skill_generation` 作为主路径 | `skill_generation` 降级为兼容路径 | 新增 `iteration_polishing` | 新增 `requirements_revision` | 不变（TDD 是任务级特性） | 不变 | 不变（9 个 phase） |
-| 打磨流程 | review → backlog_update（轻量选择） | 同 v3.0.0 | review → **强制 polishing** → backlog_update | **polishing 修复强制通过 task-runner**，问题文档采用增量追加+状态流转 | 不变 | **自动模式**：polishing 修复任务自动循环执行 | 不变 |
-| 需求管理 | 仅在 product_discovery 阶段一次性读取 | 不变 | 不变 | **支持中继修订**：backlog_update → requirements_revision → backlog_update | 不变 | 不变 | **BDD 自动生成**：planning 孵化 bdd-spec-writer，requirements_revision 复用更新 |
-| 任务执行 | 动态 Skill 文件 | 固定 task-runner 单角色 | 不变 | 不变 | **TDD 三角色调度**：task-runner 自动协调 Test Writer→Reviewer→Implementer | 不变 | **强制 Agent 子代理**：execution 孵化 task-runner，TDD 角色独立子代理 |
-| 质量门禁 | 无 | quality_gates 空壳 | 不变 | 不变 | **Approval 门禁 + 文件边界检查**：task complete 新增第 6/7 层验证 | 不变 | **变异注入反证 + E2E**：按 risk_level 分级验证 |
-| 执行流程 | 每任务需用户手动确认 | 不变 | 不变 | 不变 | 不变 | **自动模式**：execution→audit→review 自动推进，polishing 修复自动执行 | **BDD→TDD→变异→E2E** 完整质量链 |
+| 目录 | v3.0.0 | v4.0.0 | v4.1.0 | v4.2.0 | v5.0.0 | v5.1.0 | v5.3.0 | v5.4.0 | v5.5.0 |
+|------|--------|--------|--------|--------|--------|--------|--------|--------|--------|
+| `skills/` | 按迭代存放动态生成的子 Skills | **已移除**（改为固定 task-runner） | 不变 | 不变 | **新增 3 个 TDD Skill**：tdd-write-tests、tdd-review-tests、tdd-implement-feature | 不变 | **新增 bdd-spec-writer**：AI 自动生成 BDD spec | 不变（4 个 Skill） | 不变（4 个 Skill） |
+| `state.json` | `skill_version: "3.0.0"` | `skill_version: "4.0.0"` | `skill_version: "4.1.0"` | `skill_version: "4.2.0"` | `skill_version: "5.0.0"`，`schema_version: "2.0.0"` | `skill_version: "5.1.0"` | `skill_version: "5.3.0"` | `skill_version: "5.4.0"` | `skill_version: "5.5.0"` |
+| `phase` 值 | 含 `skill_generation` 作为主路径 | `skill_generation` 降级为兼容路径 | 新增 `iteration_polishing` | 新增 `requirements_revision` | 不变（TDD 是任务级特性） | 不变 | 不变（9 个 phase） | 不变 | 不变（6 主 + 2 可选 phase） |
+| 打磨流程 | review → backlog_update（轻量选择） | 同 v3.0.0 | review → **强制 polishing** → backlog_update | **polishing 修复强制通过 task-runner**，问题文档采用增量追加+状态流转 | 不变 | **自动模式**：polishing 修复任务自动循环执行 | 不变 | 不变 | 不变 |
+| 需求管理 | 仅在 product_discovery 阶段一次性读取 | 不变 | 不变 | **支持中继修订**：backlog_update → requirements_revision → backlog_update | 不变 | 不变 | **BDD 自动生成**：planning 孵化 bdd-spec-writer，requirements_revision 复用更新 | 不变 | 不变 |
+| 任务执行 | 动态 Skill 文件 | 固定 task-runner 单角色 | 不变 | 不变 | **TDD 三角色调度**：task-runner 自动协调 Test Writer→Reviewer→Implementer | 不变 | **强制 Agent 子代理**：execution 孵化 task-runner，TDD 角色独立子代理 | **Spec Compliance Review**：Phase C2 独立子代理验证实现是否匹配 spec | 不变 |
+| 质量门禁 | 无 | quality_gates 空壳 | 不变 | 不变 | **Approval 门禁 + 文件边界检查**：task complete 新增第 6/7 层验证 | 不变 | **变异注入反证 + E2E**：按 risk_level 分级验证 | **Spec Compliance Review 门禁** | **硬门禁全面升级**：阶段封存 hash manifest + fresh test run + git diff boundary + allowed_files gate + fail-closed parsers + cheating probe 独立路径 + post-green mutation |
+| 执行流程 | 每任务需用户手动确认 | 不变 | 不变 | 不变 | 不变 | **自动模式**：execution→audit→review 自动推进，polishing 修复自动执行 | **BDD→TDD→变异→E2E** 完整质量链 | **BDD→TDD→变异→Spec Compliance→E2E** | **BDD→TDD→变异→Spec Compliance→E2E + 硬门禁 + 阶段封存** |
 
 ---
 
@@ -156,60 +156,53 @@
 
 ### 3.2 phase 允许值
 
+v5.2.0 精简后为 6 个主 phase + 2 个可选 phase：
+
 ```
-init               → 初始状态
 product_discovery  → 产品发现（分析需求，建立愿景）
-backlog_planning   → Backlog 规划（迭代划分）
-iteration_planning → 迭代计划（详细开发计划）
-skill_generation   → [旧版兼容] 子 Skills 生成
-execution          → 执行督导
-iteration_audit    → 迭代审计
-iteration_review   → 迭代复盘
-iteration_polishing → 迭代打磨（必经阶段，用户测试→问题分类→修复→文档更新→循环）
-backlog_update     → 下一步决策
-requirements_revision → 需求修订（重新审视需求，更新愿景和 Backlog）
-next_iteration_scope → 下一轮范围确认
-milestone_delivery → 阶段性交付
+planning           → ★v5.2.0 合并：Backlog 划分 + 迭代详细计划 + BDD 生成
+execution          → 执行督导（通过 Agent 工具孵化 task-runner 子代理）
+iteration_review   → ★v5.2.0 合并：审计 + 复盘
+iteration_polishing → 迭代打磨（必经阶段，用户测试→问题分类→修复→循环）
+backlog_update     → 下一步决策（继续/修订/交付）
+requirements_revision → [可选] 需求修订（重新审视需求，更新愿景和 Backlog）
+milestone_delivery → [可选] 阶段性交付
 done               → [保留，不再由正常流程到达]
 ```
 
-### 3.3 状态转换图
+向后兼容的旧 phase 名（CLI 自动迁移）：
+- `backlog_planning` → `planning`
+- `iteration_planning` → `planning`
+- `next_iteration_scope` → `planning`
+- `iteration_audit` → `iteration_review`
+- `skill_generation` → `planning`
+- `init` → `product_discovery`
+
+### 3.3 状态转换图（v5.2.0+ 6-phase 模型）
 
 ```
 product_discovery
     │ product_vision_confirmed
     ▼
-backlog_planning
-    │ backlog_confirmed
+planning（合并 Backlog 划分 + 迭代计划 + BDD 生成）
+    │ planning_confirmed
     ▼
-iteration_planning
-    │ iteration_plan_confirmed
-    ▼
-[skill_generation] ←── 旧版路径，兼容
-    │ execution_started
-    ▼
-execution
+execution（通过 Agent 工具孵化 task-runner 子代理）
     │ all_tasks_done
     ▼
-iteration_audit
-    │ audit_done
-    ▼
-iteration_review
+iteration_review（合并审计 + 复盘）
     │ review_done
     ▼
-iteration_polishing ────────────────────┐
+iteration_polishing（强制 — 用户测试→问题分类→修复→循环）
     │ polishing_done                    │ 用户提交新问题（循环打磨）
     ▼                                   │
-backlog_update ───────────────────────────────────────────┐
-    │ next_iteration           │ requirements_revision     │ continue_current_iteration
-    ▼                          ▼                           ▼
-next_iteration_scope    requirements_revision        iteration_polishing
-    │ iteration_plan_confirmed  │ requirements_revision_done  │
-    ▼                          ▼                           │
-iteration_planning ←─────── backlog_update ←───────────────┘
-    ...
-    
-backlog_update ── milestone_delivery ── backlog_update (阶段性交付，继续循环)
+backlog_update ─────────────────────────┘
+    ├── next_iteration → planning（下一轮迭代）
+    ├── continue_current_iteration → iteration_polishing（继续打磨）
+    ├── requirements_revision → requirements_revision（需求修订）
+    │       └── requirements_revision_done → backlog_update
+    └── milestone_delivery → milestone_delivery（阶段性交付）
+            └── delivery_done → backlog_update（可继续迭代）
 ```
 
 ### 3.4 task_status 允许值
@@ -574,7 +567,101 @@ Backlog 中每个功能项可携带 `history` 数组，记录变更轨迹：
 
 ---
 
-## 13. 新手术语表
+## 16. 从 v5.3.0 迁移到 v5.4.0
+
+### 新增功能
+
+v5.4.0 新增 **Spec Compliance Review**（Phase C2）—— 实现完成后、E2E 之前，由独立子代理验证实现是否真正匹配 spec（不多做、不漏做、不误解）。
+
+### 新增目录
+
+```
+.project_ai/tdd/spec-compliance/   ← Spec Compliance Review 报告
+```
+
+### 新增错误码
+
+| 错误码 | 含义 |
+|--------|------|
+| `SPEC_COMPLIANCE_MISSING` | Spec Compliance Review 报告不存在 |
+| `SPEC_COMPLIANCE_FAILED` | Spec Compliance Review 未通过（verdict ≠ compliant） |
+
+### 迁移路径
+
+| 旧项目当前状态 | 迁移后的行为 |
+|---------------|-------------|
+| 任何状态 | 已有任务继续按原流程执行 |
+| TDD 任务 complete | 新增 Spec Compliance Review 门禁（Phase C2 必须通过） |
+| 旧 `project-ai init` 创建的项目 | 运行 `init --force` 重新初始化，新增 spec-compliance 目录 |
+
+### 不需要的操作
+
+- 不需要手动修改 `state.json`
+- 不需要删除任何旧文件
+
+---
+
+## 17. 从 v5.4.0 迁移到 v5.5.0
+
+### 新增功能
+
+v5.5.0 全面升级质量门禁为**硬门禁**（Hard Gates）—— 裁判不可篡改：
+
+1. **阶段封存（Phase Sealing）**：每个 TDD 阶段的产物通过 SHA-256 哈希记录到 manifest，后续 agent 无法篡改
+2. **Fresh Test Run**：`task complete` 亲自执行测试命令验证 exit_code=0，不信任 agent 声称
+3. **Git File Boundary**：用 `git diff`（5 条命令全覆盖）替代基于报告的边界检查
+4. **Allowed Files Gate**：所有生产代码变更必须在 `allowed_files` 范围内
+5. **Fail-Closed Parsers**：E2E、cheating probe、mutation 解析器默认判失败
+6. **Cheating Probe 独立路径**：Phase B 的 cheating probe 移至独立目录 `cheating-probe-results/`
+7. **Post-Green Mutation Testing**：high risk 任务在 Phase C 后执行传统 mutation testing
+
+### 新增 CLI 命令
+
+```
+project-ai tdd seal-phase <task_id> <phase>        # 封存阶段产物
+project-ai tdd check-integrity <task_id>           # 检查封存产物完整性
+```
+
+### 新增目录
+
+```
+.project_ai/tdd/cheating-probe-results/   ← Cheating Probe 独立路径（Phase B）
+.project_ai/tdd/manifests/               ← 阶段封存清单（CLI 写入，禁止 agent 修改）
+```
+
+### 新增错误码
+
+| 错误码 | 含义 |
+|--------|------|
+| `TDD_INTEGRITY_VIOLATION` | 阶段封存产物被篡改 |
+| `TDD_PHASE_MANIFEST_MISSING` | 某必需阶段的 manifest 缺失 |
+| `TDD_FRESH_TEST_FAILED` | CLI 亲自运行测试失败（命令执行层面） |
+| `TDD_TESTS_NOT_PASSING` | 测试未全部通过（exit_code ≠ 0） |
+| `TDD_FILES_OUTSIDE_ALLOWED` | 实现者修改了不在 allowed_files 中的文件 |
+| `CHEATING_PROBE_MISSING` | Cheating probe 结果文件不存在（risk>=medium 必须） |
+| `CHEATING_PROBE_INSUFFICIENT` | Cheating probe 数量不足（最少 3 个） |
+| `CHEATING_PROBE_SURVIVORS` | 有作弊实现存活（测试有盲区） |
+| `POST_GREEN_MUTATION_SURVIVORS` | Post-green mutation 有存活（high risk） |
+| `MANIFEST_ALREADY_EXISTS` | 阶段已封存，拒绝覆盖 |
+| `PHASE_REQUIRED_OUTPUTS_MISSING` | 阶段必需产出文件缺失，无法封存 |
+
+### 迁移路径
+
+| 旧项目当前状态 | 迁移后的行为 |
+|---------------|-------------|
+| 任何状态 | 已有任务继续按原流程执行 |
+| TDD 任务 complete | 新增阶段完整性检查、fresh test run、git boundary check 门禁 |
+| 旧 `project-ai init` 创建的项目 | 运行 `init --force` 重新初始化，新增 cheating-probe-results、manifests 目录 |
+
+### 不需要的操作
+
+- 不需要手动修改 `state.json`
+- 不需要删除任何旧文件
+- Manifest 文件由 CLI 自动生成和管理，agent 禁止修改
+
+---
+
+## 15. 新手术语表
 
 | 术语 | 通俗解释 |
 |------|----------|

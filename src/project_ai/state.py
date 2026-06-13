@@ -63,7 +63,7 @@ def default_state():
     from datetime import datetime, timezone
     return {
         "schema_version": "2.0.0",
-        "skill_version": "5.2.0",
+        "skill_version": "5.5.0",
         "phase": "product_discovery",
         "current_step": 1,
         "target_step": "iteration_complete",

@@ -24,6 +24,14 @@ DIRS = [
     os.path.join("tdd", "implementation-reports"),
     os.path.join("tdd", "blockers"),
     os.path.join("tdd", "open-questions"),
+    # ---- v5.3.0 变异注入与 E2E 目录 ----
+    os.path.join("tdd", "mutation-results"),
+    os.path.join("tdd", "e2e-results"),
+    # ---- v5.4.0 Spec Compliance Review 目录 ----
+    os.path.join("tdd", "spec-compliance"),
+    # ---- v5.5.0 Cheating Probe 独立路径与阶段封存清单目录 ----
+    os.path.join("tdd", "cheating-probe-results"),
+    os.path.join("tdd", "manifests"),
 ]
 
 
