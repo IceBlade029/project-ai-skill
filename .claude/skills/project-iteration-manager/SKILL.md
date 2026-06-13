@@ -1,7 +1,7 @@
 ---
 name: project-iteration-manager
-description: 产品迭代管理器。文件驱动，脱离对话上下文。管理 产品发现→规划→执行→复盘→打磨→决策 的完整流程。确定性操作交给CLI，AI负责非确定性判断。
-version: 5.5.0
+description: 产品迭代管理器。文件驱动，脱离对话上下文。管理 产品发现→规划→执行→复盘→打磨→决策 的完整流程。v5.5.0：TDD 任务由 Manager 直接编排子代理（不再经过 task-runner 中转），避免 Agent 嵌套调用输出路由问题。
+version: 5.5.1
 ---
 
 # Skill: project-iteration-manager
@@ -216,13 +216,13 @@ product_discovery → planning → execution → iteration_review
 
 ---
 
-### execution（执行督导）★ v5.3.0 强制 Agent
+### execution（执行督导）★ v5.5.0 直接编排 TDD 子代理
 
 **目标**：按依赖顺序调度任务执行。
 
-**你不是代码执行者。** project-task-runner 负责执行单个任务。你负责协调调度。
+**关键原则**：你必须通过 **Agent 工具孵化子代理**来执行每个任务。不要在主对话中直接执行——这会破坏角色分离和上下文隔离。
 
-**关键原则**：你必须通过 **Agent 工具孵化 project-task-runner 子代理**来执行每个任务。不要在主对话中直接执行任务——这会破坏角色分离和上下文隔离。
+**★v5.5.0 架构变更**：TDD 任务不再经过 project-task-runner 中转。你直接编排 TDD 三角色子代理（Test Writer → Test Reviewer → Implementer → Spec Compliance → E2E）。这避免了 Agent 嵌套调用中第 2 层子代理输出路由回顶层的问题。非 TDD 任务仍然通过 project-task-runner 执行。
 
 **执行循环**：
 
@@ -232,33 +232,334 @@ product_discovery → planning → execution → iteration_review
   2. 如果 has_next == false → 所有任务完成，退出循环
   3. 获取 task_id 和 task 信息
   4. project-ai task context <task_id> --json
-  5. 调用 Agent 工具孵化 project-task-runner 子代理：
-     - subagent_type: "claude"
-     - description: "Execute <task_id>"
-     - prompt:
-       "Read and execute ALL instructions in .claude/skills/project-task-runner/SKILL.md.
-
-        Task ID: <task_id>
-        Task context (from project-ai task context):
-        <粘贴完整 JSON>
-
-        Execute this task according to the instructions in project-task-runner/SKILL.md.
-        When done, summarize the result."
-  6. 子代理完成后，运行：
-     project-ai task complete <task_id> --json
+  5. 如果 tdd.enabled == true:
+     → 进入「TDD 直接编排流程」（见下方）
+     否则:
+     → 进入「标准任务流程」（孵化 project-task-runner）
+  6. project-ai task complete <task_id> --json
   7. 如果 complete 失败 → 把原因告诉用户，让他们修复
   8. 如果 complete 成功 → 回到步骤 1
 ```
 
-**TDD 任务说明**：当任务的 `tdd.enabled` 为 `true` 时，project-task-runner 子代理会自动协调三个独立 TDD 子代理（Test Writer → Test Reviewer → Implementer），每个拥有独立上下文，通过文件系统交接。v5.3.0 起，risk_level >= medium 的任务还会自动执行变异注入反证。
-
-**批量执行**：用户可以说"执行所有剩余任务"——你仍然逐个孵化 task-runner 子代理，但不等待用户确认每个任务，只在出错时暂停。
-
-**重要**：你是调度器，不是执行者。**绝对不要**读取 task-runner 的 SKILL.md 并自己在主对话中执行任务步骤。你必须通过 Agent 工具孵化子代理。
+**批量执行**：用户可以说"执行所有剩余任务"——你仍然逐个执行，但不等待用户确认每个任务，只在出错时暂停。
 
 **所有任务完成后**：
 1. 运行 `project-ai advance --event all_tasks_done --json`
 2. 自动进入 iteration_review。
+
+---
+
+### 标准任务流程（非 TDD 任务）
+
+孵化 project-task-runner 子代理：
+
+- `subagent_type`: `"claude"`
+- `description`: `"Execute <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/project-task-runner/SKILL.md.
+
+  Task ID: <task_id>
+  Task context (from project-ai task context):
+  <粘贴 project-ai task context 返回的完整 JSON>
+
+  Execute this task according to the instructions in project-task-runner/SKILL.md.
+  When done, summarize the result.
+  ```
+
+---
+
+### TDD 直接编排流程（v5.5.0 新增）
+
+你是 **TDD 调度器**——你不写测试、不审查、不实现。你按顺序孵化 4～5 个独立子代理，每个拥有独立上下文，通过文件系统交接。每完成一个 Phase 立即封存产物。
+
+#### 风险等级速查
+
+检查 `task context` 返回 JSON 中任务的 `risk_level` 字段：
+
+| risk_level | 验证策略 |
+|-----------|---------|
+| `low` | 标准 TDD 4 阶段（A→B→C→C2） |
+| `medium` | TDD 4 阶段 + Phase B 含至少 3 个 Cheating Probe |
+| `high` | TDD 4 阶段 + Phase B Cheating Probe + Phase C3 E2E 验证 |
+
+如果 `risk_level` 字段不存在，默认按 `medium` 处理。
+
+---
+
+#### Phase A：孵化 Test Writer（编写测试）
+
+**调用 Agent 工具：**
+
+- `subagent_type`: `"claude"`
+- `description`: `"Test Writer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-write-tests/SKILL.md.
+
+  Task ID: <task_id>
+  The full task context is below. Read the tdd field to find spec_files, rule_files,
+  type_files, test_style, and test_command.
+
+  Task context (from project-ai task context <task_id>):
+  <粘贴 project-ai task context 返回的完整 JSON>
+
+  You are an independent Test Writer sub-agent. Your ONLY job is to write tests.
+  Do NOT implement production code. Do NOT review your own tests.
+  When done, output a summary of files created, red-run status, and coverage gaps.
+  ```
+
+**子代理返回后，你必须验证：**
+
+1. `.project_ai/tdd/coverage/<task_id>.coverage.md` 是否存在
+2. `.project_ai/tdd/red-runs/<task_id>.red-run.md` 是否存在
+3. 如果存在 `.project_ai/tdd/open-questions/<task_id>.questions.md`：
+   → **暂停并向用户报告 spec 矛盾**，等待澄清后再继续
+4. 如果上述必需文件缺失 → **报告用户**，不要继续 Phase B
+
+**验证通过后，立即封存 Phase A 产物：**
+
+```
+project-ai tdd seal-phase <task_id> test_writer --json
+```
+
+如果返回 `ok: false`（如 manifest 已存在），报告用户，不要继续。
+
+---
+
+#### Phase B：孵化 Test Reviewer（审查测试）
+
+**调用 Agent 工具：**
+
+- `subagent_type`: `"claude"`
+- `description`: `"Test Reviewer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-review-tests/SKILL.md.
+
+  Task ID: <task_id>
+  Risk level: <risk_level>
+
+  You are an independent Test Reviewer sub-agent. Your ONLY job is to attack the tests.
+  Do NOT implement production code. Do NOT write tests.
+  When done, output whether tests are approved or not.
+
+  <如果 risk_level 为 medium 或 high，追加：>
+  CRITICAL: This is a medium/high-risk task. After the standard review, you MUST
+  perform the "Cheating Implementation Probe" step described in your SKILL.md — design at
+  least 3 cheating implementations, inject them, and verify tests catch them.
+  ```
+
+**子代理返回后，你必须验证：**
+
+1. `.project_ai/tdd/reviews/<task_id>.test-review.md` 是否存在
+2. `.project_ai/tdd/approvals/<task_id>.approved.md` 是否存在
+   - 如果审批文件不存在 → **向用户报告审查结果**（review 报告中的弱点），等待测试修复后重新进入 Phase A
+3. 如果 risk_level >= medium：
+   - `.project_ai/tdd/cheating-probe-results/<task_id>.cheating-probe.md` 是否存在
+   - 如果缺失 → 提示 Test Reviewer 补做 Cheating Implementation Probe
+
+**验证通过后，立即封存 Phase B 产物：**
+
+```
+project-ai tdd seal-phase <task_id> test_reviewer --json
+```
+
+如果返回 `ok: false`，报告用户，不要继续。
+
+---
+
+#### Phase C：孵化 Implementer（实现功能）
+
+**前置条件**：必须先运行以下命令确认审批通过：
+
+```
+project-ai tdd check-approval <task_id>
+```
+
+如果 `approved` 为 `false`，STOP，不要继续。
+
+**调用 Agent 工具：**
+
+- `subagent_type`: `"claude"`
+- `description`: `"Implementer for <task_id>"`
+- `prompt`:
+  ```
+  Read and execute ALL instructions in .claude/skills/tdd-implement-feature/SKILL.md.
+
+  Task ID: <task_id>
+
+  You are an independent Implementer sub-agent. Your ONLY job is to make
+  approved tests pass. Do NOT modify tests. Do NOT modify specs.
+  When done, output implementation summary and files changed.
+  ```
+
+**子代理返回后，你必须验证：**
+
+1. 运行 `project-ai tdd check-boundary <task_id>` 确认实现者没有越界修改
+2. 如果有违规 → **报告用户**，不标记任务完成
+
+**验证通过后，立即封存 Phase C 产物：**
+
+```
+project-ai tdd seal-phase <task_id> implementer --json
+```
+
+如果返回 `ok: false`，报告用户，不要继续。
+
+---
+
+#### Phase C2：孵化 Spec Compliance Reviewer（所有 TDD 任务强制，v5.4.0）
+
+**调用 Agent 工具：**
+
+- `subagent_type`: `"claude"`
+- `description`: `"Spec compliance review for <task_id>"`
+- `prompt`:
+  ```
+  You are a Spec Compliance Reviewer. Your job is adversarial — you do NOT trust
+  the implementer's report. You verify EVERYTHING independently by reading the
+  actual code.
+
+  Task ID: <task_id>
+
+  ## What Was Requested
+
+  1. Read the BDD spec files:
+     <粘贴 task.tdd.spec_files 列表>
+  2. Read the rule table files:
+     <粘贴 task.tdd.rule_files 列表>
+  3. Read the task description and acceptance criteria from the plan.
+
+  ## What the Implementer Claims
+
+  Read .project_ai/tdd/implementation-reports/<task_id>.implementation.md
+
+  ## Your Job
+
+  Read the IMPLEMENTATION CODE (not the report) and verify:
+
+  ### Missing requirements
+  - Is EVERY acceptance criterion met by actual running code?
+  - Are there spec requirements the implementer skipped or missed?
+
+  ### Extra/unneeded work (YAGNI violation)
+  - Did they build things NOT in the spec?
+  - Did they over-engineer beyond what the spec requires?
+
+  ### Misunderstandings
+  - Did they interpret requirements differently than intended?
+  - Did they solve a different problem than what the spec describes?
+
+  ### Spec-to-code traceability
+  - Can you trace every spec scenario to the code that fulfills it?
+
+  ## Output
+
+  Write to .project_ai/tdd/spec-compliance/<task_id>.spec-compliance.md:
+
+  ```
+  # Spec Compliance Review — <task_id>
+
+  ## Verdict: ✅ COMPLIANT | ❌ ISSUES FOUND
+
+  ## Missing (spec requires, code doesn't deliver)
+  - [file:line] <具体问题>
+
+  ## Extra (code delivers, spec doesn't require)
+  - [file:line] <具体问题>
+
+  ## Misunderstood (code does something different from spec intent)
+  - [file:line] <具体问题>
+
+  ## Traceability gaps (spec scenario → no matching code path)
+  - Scenario "<name>": no implementation found
+
+  ## Notes
+  ```
+
+  **CRITICAL**: If you find MISSING or MISUNDERSTOOD issues, the verdict is ❌.
+  ```
+
+**子代理返回后，你必须处理：**
+
+- 如果 verdict 是 `❌ ISSUES FOUND`：
+  - 将问题报告给用户
+  - **回退到 Phase C**，将 spec compliance 报告中的问题交给 Implementer 子代理修复
+  - Implementer 修复后，重新运行 Phase C2
+  - 循环直到 verdict 为 ✅
+- 如果 verdict 是 `✅ COMPLIANT`：
+  - **立即封存 Phase C2 产物**：
+    ```
+    project-ai tdd seal-phase <task_id> spec_compliance --json
+    ```
+
+---
+
+#### Phase C3：浏览器 E2E 验证（仅 risk_level=high 且含 e2e_scenarios）
+
+如果任务的 `tdd.e2e_scenarios` 字段存在且非空，**额外孵化一次 Agent**：
+
+- `subagent_type`: `"claude"`
+- `description`: `"E2E verification for <task_id>"`
+- `prompt`:
+  ```
+  You are an E2E verification agent. You must verify the implemented feature
+  against real browser scenarios using Playwright (or equivalent).
+
+  Task ID: <task_id>
+  E2E scenarios:
+  <粘贴 tdd.e2e_scenarios 内容>
+
+  For each scenario:
+  1. Start from a real user entry point (not a mounted component)
+  2. Use real interactions (click, type, drag, keyboard — not direct store manipulation)
+  3. Verify loading, success, error, and empty states
+  4. Refresh the page and verify state persistence
+  5. Verify error/failure paths
+
+  Write results to .project_ai/tdd/e2e-results/<task_id>.e2e-results.md
+  Include: scenario name, status (pass/fail), screenshots if failures, error details.
+  ```
+
+**子代理返回后**：
+- 检查 `.project_ai/tdd/e2e-results/<task_id>.e2e-results.md` 是否生成
+- 如果 E2E 失败 → 报告用户失败场景，回退到 Phase C
+
+**验证通过后，立即封存 Phase C3 产物**：
+
+```
+project-ai tdd seal-phase <task_id> e2e --json
+```
+
+---
+
+#### TDD 流程完成后
+
+所有 Phase 完成后，你无需手动生成任务报告——`project-ai task complete` CLI 会执行所有硬门禁检查（阶段完整性、fresh test run、git boundary、allowed_files gate、spec compliance verdict、cheating probe 结果、E2E 结果）。
+
+直接运行：
+
+```
+project-ai task complete <task_id> --json
+```
+
+根据返回结果决定继续下一个任务或报告错误。
+
+#### TDD 错误处理速查
+
+| 情况 | 处理 |
+|------|------|
+| Test Writer 产生 open-questions | 暂停并向用户报告 spec 矛盾，等待澄清 |
+| Test Reviewer 未生成 approval | 向用户报告审查弱点，等待测试修复后重新进入 Phase A |
+| Implementer boundary check 失败 | 报告用户，实现者违规修改了禁止文件 |
+| Spec Compliance verdict ❌ | 将问题回传给 Implementer 修复，重新运行 Phase C2 |
+| E2E 失败 | 报告用户失败场景，回退到 Phase C 修复 |
+| seal-phase 返回 MANIFEST_ALREADY_EXISTS | 该阶段已封存。如果需重新封存，手动删除旧 manifest |
+| seal-phase 返回 PHASE_REQUIRED_OUTPUTS_MISSING | 子代理未产出必需文件，回退到对应 Phase 重新执行 |
+| task complete 返回 TDD_INTEGRITY_VIOLATION | 阶段封存产物被篡改，检查 manifest violations |
+| task complete 返回 TDD_FILES_OUTSIDE_ALLOWED | 实现者越界修改，检查 extra_files 列表 |
+| task complete 返回 CHEATING_PROBE_SURVIVORS | 测试有盲区，补充测试后重新进入 Phase A |
 
 ---
 
@@ -421,8 +722,8 @@ product_discovery → planning → execution → iteration_review
 10. **打磨阶段是必经阶段**：review 后强制进入 polishing，不可跳过。用户在对话中口述问题，AI 自动填写分类。
 11. **JSON 是机器权威源，Markdown 是用户确认源**。
 12. **向后兼容**：CLI 自动迁移旧 phase 名和 event 名（如 `backlog_planning` → `planning`、`audit_done` → `review_done`）。
-13. **★v5.3.0 强制 Agent**：execution 阶段必须通过 Agent 工具孵化 project-task-runner 子代理。绝对禁止在主对话中直接执行任务。
-14. **★v5.3.0 分级验证**：每个任务必须标注 risk_level（low/medium/high），task-runner 根据等级自动选择验证深度。高风险前端任务必须包含 E2E 场景。
+13. **★v5.5.0 直接编排 TDD**：TDD 任务由你直接孵化 TDD 子代理（Test Writer → Test Reviewer → Implementer → Spec Compliance → E2E），不再经过 project-task-runner 中转。非 TDD 任务仍然通过 project-task-runner 执行。绝对禁止在主对话中直接执行任务代码。
+14. **★v5.3.0 分级验证**：每个任务必须标注 risk_level（low/medium/high），你根据等级自动选择验证深度（low=标准4阶段，medium=+Cheating Probe，high=+Cheating Probe+E2E）。高风险前端任务必须包含 E2E 场景。
 15. **★v5.3.0 BDD 质量**：每个 TDD 任务的 spec 必须覆盖 happy path、failure paths、async states（前端）、user operation sequence（前端）。
 16. **★v5.3.0 BDD 生成**：planning 阶段必须通过 Agent 工具孵化 bdd-spec-writer 子代理生成 BDD spec，不得要求用户手动编写 .feature 文件。requirements_revision 阶段复用该子代理更新受影响的 spec。
 
@@ -436,7 +737,9 @@ These thoughts mean you are rationalizing. Stop immediately.
 |---------|---------|
 | "I already know the current phase, no need to run project-ai status" | Every session starts with `project-ai status --json`. File state, not memory. |
 | "The user probably wants X, I'll just proceed" | Ask. Never assume user intent. Confirmations exist for a reason. |
-| "I'll just execute this task myself, it's faster" | You are a scheduler. Spawn task-runner via Agent tool. Direct execution = role collapse. |
+| "I'll just execute this task myself, it's faster" | TDD tasks: spawn Test Writer/Reviewer/Implementer agents directly. Non-TDD: spawn task-runner. Direct execution = role collapse. |
+| "I'll spawn one combined agent to do test+review+implement" | TDD phases must be independent agents. Combining = destroying cognitive isolation. |
+| "The TDD sub-agent failed, I'll fix its output myself" | Fix the CONTEXT you provided, re-dispatch the sub-agent. Never patch sub-agent output manually. |
 | "I'll skip the confirmation document, the user already agreed" | Confirmation docs create an audit trail. Skipping them = losing traceability. |
 | "This iteration has 12 tasks but they're all small" | Maximum 8 tasks per iteration. Rule exists to keep scope controllable. Split into two iterations. |
 | "I'll generate the plan first, then run bdd-spec-writer later" | BDD spec generation happens DURING planning, before confirmation. Not after. |
@@ -444,6 +747,8 @@ These thoughts mean you are rationalizing. Stop immediately.
 | "The user can manually write .feature files for these tasks" | BDD spec is generated by bdd-spec-writer sub-agent. Never ask the user to write .feature files. |
 | "I'll skip polishing since the user didn't mention any issues" | Polishing is MANDATORY after every iteration review. The user may not know what to test — you must prompt them. |
 | "The state.json looks correct, I'll advance manually" | Phase transitions go through `project-ai advance` CLI. Never edit state.json directly. |
+| "I'll skip seal-phase, the files look fine" | Every TDD phase must be sealed immediately after verification. Unsealed phases = no integrity protection. |
+| "I'll skip the Cheating Probe for this medium-risk task" | Cheating probe is MANDATORY for risk_level >= medium. At least 3 probes, all must be KILLED. |
 
 ## 错误处理速查
 
@@ -465,6 +770,14 @@ These thoughts mean you are rationalizing. Stop immediately.
 | TDD 流程中 seal-phase 返回 MANIFEST_ALREADY_EXISTS | 该阶段已封存。如果需重新封存，手动删除旧 manifest 后重试 |
 | task complete 返回 TDD_PHASE_MANIFEST_MISSING | 某必需阶段未封存。检查是否每个 phase 结束后都运行了 seal-phase |
 | TDD 流程中 seal-phase 返回 PHASE_REQUIRED_OUTPUTS_MISSING | 子代理未产出必需文件。回退到对应 Phase 重新执行 |
+| task complete 返回 SPEC_COMPLIANCE_MISSING | Spec Compliance Review 未执行（Phase C2），回退到 Phase C2 孵化子代理 |
+| task complete 返回 SPEC_COMPLIANCE_FAILED | Spec Compliance Review 未通过，将问题回传 Implementer 修复后重新运行 Phase C2 |
+| task complete 返回 CHEATING_PROBE_MISSING | risk>=medium 任务缺少 Cheating Probe，回退到 Phase B 补做 |
+| task complete 返回 CHEATING_PROBE_INSUFFICIENT | Cheating Probe 数量不足（最少 3 个），回退到 Phase B 补充 |
+| task complete 返回 CHEATING_PROBE_SURVIVORS | 测试存在盲区，补充测试后重新进入 Phase A |
+| task complete 返回 E2E_RESULTS_MISSING | high risk 任务缺少 E2E 验证，回退到 Phase C3 |
+| task complete 返回 E2E_FAILED | E2E 验证未通过，将失败场景报告用户，回退到 Phase C 修复 |
+| task complete 返回 POST_GREEN_MUTATION_SURVIVORS | high risk 任务 post-green mutation 有存活，检查 mutation 报告补充测试 |
 
 ## 参考文档
 

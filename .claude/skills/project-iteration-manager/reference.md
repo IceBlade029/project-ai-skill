@@ -661,6 +661,52 @@ project-ai tdd check-integrity <task_id>           # 检查封存产物完整性
 
 ---
 
+## 18. 从 v5.5.0 迁移到 v5.5.1
+
+### 架构变更
+
+v5.5.1 修复了 **Agent 嵌套调用输出路由问题**：当 Manager → Agent(Task Runner) → Agent(TDD sub-agent) 形成两层嵌套时，第 2 层子代理的输出会直接浮到顶层对话，Task Runner 无法实际执行调度和验证。
+
+**变更**：TDD 任务不再经过 project-task-runner 中转。
+
+- **v5.5.0**：Manager → Agent(Task Runner) → Agent(Test Writer) → Agent(Test Reviewer) → ...
+- **v5.5.1**：Manager → Agent(Test Writer) → Agent(Test Reviewer) → Agent(Implementer) → Agent(Spec Compliance) → Agent(E2E)
+
+Manager 直接编排所有 TDD 子代理，每个都是 Manager 级别的独立 Agent 调用。Task Runner 退化为只处理非 TDD 任务（项目初始化、配置、文档、重构等）。
+
+### 变更文件
+
+| 文件 | 变更 |
+|------|------|
+| `project-iteration-manager/SKILL.md` | execution 阶段重写，新增「TDD 直接编排流程」完整章节（Phase A→B→C→C2→C3） |
+| `project-task-runner/SKILL.md` | 移除全部 TDD 调度内容，TDD 任务收到即停止并重定向 |
+
+### TDD 子技能（不变）
+
+以下 4 个 TDD 子技能无需修改，仍然由 Agent 工具独立孵化：
+
+- `tdd-write-tests` — 测试编写
+- `tdd-review-tests` — 测试审查（含 Cheating Probe）
+- `tdd-implement-feature` — 功能实现
+- `bdd-spec-writer` — BDD 规格生成（planning 阶段，不受影响）
+
+### 迁移路径
+
+| 旧行为 | 新行为 |
+|--------|--------|
+| Manager 孵化 Task Runner | TDD 任务：Manager 直接按 A→B→C→C2→C3 顺序孵化 TDD 子代理 |
+| Task Runner 孵化 TDD 子代理 | 非 TDD 任务：Manager 仍然孵化 Task Runner |
+| Task Runner 运行 seal-phase | Manager 在每个 TDD Phase 完成后直接运行 seal-phase |
+| Task Runner 运行 task complete | Manager 在所有 Phase 完成后直接运行 task complete |
+
+### 不需要的操作
+
+- 不需要修改 `state.json`
+- 不需要修改 CLI 代码
+- 不需要修改 4 个 TDD 子技能文件
+
+---
+
 ## 15. 新手术语表
 
 | 术语 | 通俗解释 |
