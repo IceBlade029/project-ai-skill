@@ -6,6 +6,4 @@ venv/
 *.egg-info/
 dist/
 build/
-.project_ai/
 .project_ai_backup_*/
-state.json.backup.*

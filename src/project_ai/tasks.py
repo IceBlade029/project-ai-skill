@@ -4,7 +4,7 @@ import os
 import re
 import json
 from project_ai.state import STATE_DIR, load_state, save_state
-from project_ai.utils import backup_file, now_iso
+from project_ai.utils import now_iso
 from project_ai.cli_tdd import _is_forbidden, _run_test, _check_integrity, check_file_boundary
 
 
@@ -72,9 +72,6 @@ def sync_tasks(cwd):
                 "error_code": "TASKS_FORMAT_ERROR",
                 "message": f"第 {i} 个任务缺少 id 字段。",
             }
-
-    # 备份 state.json
-    backup_file(os.path.join(cwd, STATE_DIR, "state.json"))
 
     # 同步
     state["iteration_tasks"] = tasks
@@ -533,8 +530,6 @@ def complete_task(cwd, task_id):
                 }
 
     # 全部通过，更新状态
-    backup_file(os.path.join(cwd, STATE_DIR, "state.json"))
-
     task_status = state.get("task_status", {})
     task_status[task_id] = "done"
     state["task_status"] = task_status

@@ -1,8 +1,9 @@
 """advance 命令 — 状态推进引擎."""
 
 import os
+import subprocess
 from project_ai.state import STATE_DIR, load_state, save_state
-from project_ai.utils import backup_file, now_iso
+from project_ai.utils import now_iso
 
 # 合法状态转换表（v5.2.0 精简版：10 条转换）
 TRANSITIONS = {
@@ -80,10 +81,6 @@ def run(cwd, event):
 
     new_phase = TRANSITIONS[key]
 
-    # 备份 state.json
-    state_path = os.path.join(target_dir, "state.json")
-    backup_file(state_path)
-
     # 特殊处理各事件
     if event == "product_vision_confirmed":
         state["current_step"] = 2
@@ -147,6 +144,9 @@ def run(cwd, event):
     # 保存
     save_state(cwd, state)
 
+    # 里程碑事件自动 git 提交 .project_ai/ 状态快照
+    _auto_commit_snapshot(cwd, event, state)
+
     return {
         "ok": True,
         "previous_phase": current_phase,
@@ -154,3 +154,38 @@ def run(cwd, event):
         "event": event,
         "message": f"状态已从 '{current_phase}' 推进到 '{new_phase}'（事件：{event}）",
     }
+
+
+def _auto_commit_snapshot(cwd, event, state):
+    """在关键里程碑自动提交 .project_ai/ 到 git（v5.5.1 新增）。
+
+    只在 polishing_done 和 delivery_done 两个事件触发。
+    仅 git add .project_ai/，不碰业务代码。
+    git 不可用时静默跳过，不阻塞流程。
+    """
+    if event not in ("polishing_done", "delivery_done"):
+        return
+
+    n = state.get("current_iteration", 0)
+
+    event_labels = {
+        "polishing_done": f"iteration({n}): polishing complete — state snapshot",
+        "delivery_done": "milestone delivery complete — state snapshot",
+    }
+    message = event_labels.get(event, f"state snapshot after {event}")
+
+    try:
+        subprocess.run(
+            ["git", "add", STATE_DIR + "/"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, cwd=cwd, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", message, "--allow-empty"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, cwd=cwd,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            FileNotFoundError, OSError):
+        # git 不可用或没有变更时静默跳过
+        pass

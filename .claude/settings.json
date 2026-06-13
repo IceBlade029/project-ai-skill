@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(project-ai *)",
+      "Bash(python bin/project-ai *)",
+      "Bash(python D:\\\\project-ai\\\\bin\\\\project-ai *)",
+      "Bash(python -m py_compile D:\\\\project-ai\\\\src\\\\*)",
+      "Bash(git add .project_ai/*)",
+      "Bash(git commit -m 'iteration(*)')",
+      "Bash(git commit -m 'milestone delivery complete *')",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(rm -rf .project_ai)",
+      "Bash(mkdir -p .project_ai/*)",
+      "Bash(echo *)",
+      "Agent(Test Writer for *)",
+      "Agent(Test Reviewer for *)",
+      "Agent(Implementer for *)",
+      "Agent(Spec compliance review for *)",
+      "Agent(E2E verification for *)",
+      "Agent(Execute *)",
+      "Agent(BDD spec writer for *)"
+    ]
+  }
+}

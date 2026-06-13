@@ -705,6 +705,16 @@ Manager 直接编排所有 TDD 子代理，每个都是 Manager 级别的独立 
 - 不需要修改 CLI 代码
 - 不需要修改 4 个 TDD 子技能文件
 
+### 状态备份机制变更
+
+v5.5.1 同时移除了 `state.json` 的自动备份机制（`backup_file`），改为依赖 git：
+
+- **删除**：`utils.backup_file()` 函数及其在 `advance`、`task sync`、`task complete` 中的 3 处调用
+- **新增**：`polishing_done` 和 `delivery_done` 两个里程碑事件自动执行 `git add .project_ai/ && git commit`
+- **.gitignore**：移除 `.project_ai/` 和 `state.json.backup.*` 排除规则，`.project_ai/` 纳入版本控制
+
+自动提交仅涉及 `.project_ai/` 目录（状态文件、确认文档、TDD 产物、复盘报告等），不碰业务代码（`src/`、`tests/` 等）。git 不可用时静默跳过，不阻塞流程。
+
 ---
 
 ## 15. 新手术语表
